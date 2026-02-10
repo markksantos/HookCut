@@ -35,11 +35,13 @@ class AppState: ObservableObject {
 
     // Services - injected so teammates can implement independently
     var transcriptionService: TranscriptionServiceProtocol?
-    var analysisService: AnalysisServiceProtocol?
+    var analysisService: (any TranscriptionServiceProtocol)?  // analysis integrated into transcription service
     var exportService: ExportServiceProtocol?
 
     init() {
         self.settings = SettingsManager.load()
+        self.transcriptionService = TranscriptionService()
+        self.exportService = ExportService()
     }
 
     func saveSettings() {
@@ -134,7 +136,7 @@ extension PromptTemplate {
 
 // MARK: - Codable conformance for Set<HighlightType>
 
-extension Set: @retroactive RawRepresentable where Element == HighlightType {
+extension Set<HighlightType>: @retroactive RawRepresentable {
     public init?(rawValue: String) {
         let types = rawValue.split(separator: ",").compactMap { HighlightType(rawValue: String($0)) }
         self = Set(types)

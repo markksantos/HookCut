@@ -302,7 +302,7 @@ struct AnalysisResult: Codable {
 // MARK: - Export Models
 
 /// Available export formats
-enum ExportFormat: String, CaseIterable, Identifiable {
+enum ExportFormat: String, Codable, CaseIterable, Identifiable {
     case fcpxml = "FCPXML"
     case premiereXML = "Premiere XML"
     case edl = "EDL"
