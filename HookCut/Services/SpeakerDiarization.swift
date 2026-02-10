@@ -101,10 +101,10 @@ struct SpeakerDiarization {
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 120
+        request.timeoutInterval = 600
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await APISession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw DiarizationError.networkError("Invalid response")
         }
@@ -138,10 +138,10 @@ struct SpeakerDiarization {
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 120
+        request.timeoutInterval = 600
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await APISession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw DiarizationError.networkError("Invalid response")
         }

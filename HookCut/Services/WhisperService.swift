@@ -74,7 +74,7 @@ struct WhisperService {
             fileName: fileURL.lastPathComponent
         )
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await APISession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw WhisperError.networkError("Invalid response type")

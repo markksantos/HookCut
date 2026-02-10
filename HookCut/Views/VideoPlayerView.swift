@@ -55,6 +55,15 @@ struct VideoPlayerView: View {
             }
 
             Spacer()
+            if viewModel.isPreviewingAssembled {
+                Text("PREVIEW")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(.orange)
+                    .clipShape(Capsule())
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

@@ -18,24 +18,33 @@ struct FCPXMLGenerator {
         let formatId = "r1"
         let assetId = "r2"
 
+        let width = mediaFile.videoWidth ?? 1920
+        let height = mediaFile.videoHeight ?? 1080
+
         let formatEl = XMLElement(name: "format")
         formatEl.addAttribute(attr("id", formatId))
+        formatEl.addAttribute(attr("name", fcpFormatName(width: width, height: height, frameRate: frameRate)))
         formatEl.addAttribute(attr("frameDuration", frameRate.frameDuration.fcpxmlString))
-        formatEl.addAttribute(attr("width", String(mediaFile.videoWidth ?? 1920)))
-        formatEl.addAttribute(attr("height", String(mediaFile.videoHeight ?? 1080)))
+        formatEl.addAttribute(attr("width", String(width)))
+        formatEl.addAttribute(attr("height", String(height)))
         resources.addChild(formatEl)
 
         let totalDuration = RationalTime.fromSeconds(mediaFile.duration, frameRate: frameRate)
         let assetEl = XMLElement(name: "asset")
         assetEl.addAttribute(attr("id", assetId))
-        assetEl.addAttribute(attr("src", mediaFile.url.absoluteString))
+        assetEl.addAttribute(attr("name", mediaFile.fileName))
         assetEl.addAttribute(attr("start", "0s"))
         assetEl.addAttribute(attr("duration", totalDuration.fcpxmlString))
         assetEl.addAttribute(attr("hasVideo", mediaFile.isVideoFile ? "1" : "0"))
         assetEl.addAttribute(attr("hasAudio", "1"))
         assetEl.addAttribute(attr("format", formatId))
-        resources.addChild(assetEl)
 
+        let mediaRep = XMLElement(name: "media-rep")
+        mediaRep.addAttribute(attr("kind", "original-media"))
+        mediaRep.addAttribute(attr("src", mediaFile.url.absoluteString))
+        assetEl.addChild(mediaRep)
+
+        resources.addChild(assetEl)
         root.addChild(resources)
 
         // Library → Event → Project → Sequence → Spine
@@ -47,23 +56,34 @@ struct FCPXMLGenerator {
         let project = XMLElement(name: "project")
         project.addAttribute(attr("name", "Highlights - \(config.projectName)"))
 
-        // Calculate total sequence duration: sum of clip durations + gaps between them
-        let gapTime = RationalTime.fromSeconds(config.gapDuration, frameRate: frameRate)
-        let totalSequenceDuration = sequenceDuration(clips: clips, gapTime: gapTime, frameRate: frameRate)
+        // Handle duration is used as padding on each clip (half before, half after)
+        let handlePadding = config.gapDuration / 2.0
+
+        let totalSequenceDuration = sequenceDuration(
+            clips: clips,
+            handlePadding: handlePadding,
+            mediaDuration: mediaFile.duration,
+            frameRate: frameRate
+        )
 
         let sequence = XMLElement(name: "sequence")
-        sequence.addAttribute(attr("format", formatId))
         sequence.addAttribute(attr("duration", totalSequenceDuration.fcpxmlString))
+        sequence.addAttribute(attr("format", formatId))
         sequence.addAttribute(attr("tcStart", "0s"))
-        sequence.addAttribute(attr("tcFormat", frameRate.isDropFrame ? "DF" : "NDF"))
+        sequence.addAttribute(attr("tcFormat", "NDF"))
 
         let spine = XMLElement(name: "spine")
 
         var runningOffset = RationalTime(numerator: 0, denominator: frameRate.frameDuration.denominator)
 
-        for (index, highlight) in clips.enumerated() {
-            let clipStart = RationalTime.fromSeconds(highlight.startTime, frameRate: frameRate)
-            let clipDuration = RationalTime.fromSeconds(highlight.duration, frameRate: frameRate)
+        for highlight in clips {
+            // Extend clip with handle padding for editor breathing room
+            let paddedStart = max(0, highlight.startTime - handlePadding)
+            let paddedEnd = min(mediaFile.duration, highlight.endTime + handlePadding)
+            let paddedDuration = paddedEnd - paddedStart
+
+            let clipStart = RationalTime.fromSeconds(paddedStart, frameRate: frameRate)
+            let clipDuration = RationalTime.fromSeconds(paddedDuration, frameRate: frameRate)
 
             let clipName = sanitizeForXML("\(highlight.type.displayName): \(highlight.text)")
             let assetClip = XMLElement(name: "asset-clip")
@@ -72,28 +92,22 @@ struct FCPXMLGenerator {
             assetClip.addAttribute(attr("start", clipStart.fcpxmlString))
             assetClip.addAttribute(attr("duration", clipDuration.fcpxmlString))
             assetClip.addAttribute(attr("name", clipName))
+            assetClip.addAttribute(attr("tcFormat", "NDF"))
 
             if config.includeMarkers {
+                // Marker start is relative to the clip's own start point
+                let markerOffset = RationalTime.fromSeconds(handlePadding, frameRate: frameRate)
+                let markerStart = addRationalTimes(clipStart, markerOffset, denominator: frameRate.frameDuration.denominator)
                 let marker = XMLElement(name: "marker")
-                marker.addAttribute(attr("start", clipStart.fcpxmlString))
+                marker.addAttribute(attr("start", markerStart.fcpxmlString))
                 marker.addAttribute(attr("value", sanitizeForXML("\(highlight.type.displayName): \(highlight.text)")))
                 assetClip.addChild(marker)
             }
 
             spine.addChild(assetClip)
 
-            // Advance running offset by clip duration
+            // Advance running offset — clips placed back-to-back, no empty gaps
             runningOffset = addRationalTimes(runningOffset, clipDuration, denominator: frameRate.frameDuration.denominator)
-
-            // Add gap between clips (except after the last one)
-            if index < clips.count - 1 {
-                let gap = XMLElement(name: "gap")
-                gap.addAttribute(attr("offset", runningOffset.fcpxmlString))
-                gap.addAttribute(attr("duration", gapTime.fcpxmlString))
-                spine.addChild(gap)
-
-                runningOffset = addRationalTimes(runningOffset, gapTime, denominator: frameRate.frameDuration.denominator)
-            }
         }
 
         sequence.addChild(spine)
@@ -109,9 +123,36 @@ struct FCPXMLGenerator {
         xmlDoc.dtd!.name = "fcpxml"
 
         let xmlData = xmlDoc.xmlData(options: [.nodePrettyPrint])
-        // Validate well-formedness by re-parsing
         _ = try XMLDocument(data: xmlData)
         return xmlData
+    }
+
+    // MARK: - FCP Format Name
+
+    /// Generate the FCP-recognized format name (e.g., "FFVideoFormat1080p2997")
+    private func fcpFormatName(width: Int, height: Int, frameRate: FrameRate) -> String {
+        let resolution: String
+        switch height {
+        case 0..<600: resolution = "\(height)p"
+        case 600..<800: resolution = "720p"
+        case 800..<1200: resolution = "1080p"
+        case 1200..<1800: resolution = "1440p"
+        case 1800..<2400: resolution = "2160p"
+        default: resolution = "\(height)p"
+        }
+
+        let fps: String
+        switch frameRate {
+        case .fps23_976: fps = "2398"
+        case .fps24: fps = "24"
+        case .fps25: fps = "25"
+        case .fps29_97: fps = "2997"
+        case .fps30: fps = "30"
+        case .fps59_94: fps = "5994"
+        case .fps60: fps = "60"
+        }
+
+        return "FFVideoFormat\(resolution)\(fps)"
     }
 
     // MARK: - Helpers
@@ -121,7 +162,6 @@ struct FCPXMLGenerator {
     }
 
     private func sanitizeForXML(_ string: String) -> String {
-        // XMLElement handles escaping automatically, but truncate overly long names
         let maxLength = 200
         if string.count > maxLength {
             return String(string.prefix(maxLength)) + "..."
@@ -130,35 +170,33 @@ struct FCPXMLGenerator {
     }
 
     private func addRationalTimes(_ a: RationalTime, _ b: RationalTime, denominator: Int) -> RationalTime {
-        // Both times share the same denominator (from the same frame rate)
         if a.denominator == b.denominator {
             return RationalTime(numerator: a.numerator + b.numerator, denominator: a.denominator)
         }
-        // Cross-multiply for different denominators
         let commonDenom = a.denominator * b.denominator
         let newNum = a.numerator * b.denominator + b.numerator * a.denominator
         return RationalTime(numerator: newNum, denominator: commonDenom)
     }
 
-    private func sequenceDuration(clips: [Highlight], gapTime: RationalTime, frameRate: FrameRate) -> RationalTime {
+    private func sequenceDuration(
+        clips: [Highlight],
+        handlePadding: TimeInterval,
+        mediaDuration: TimeInterval,
+        frameRate: FrameRate
+    ) -> RationalTime {
         let denom = frameRate.frameDuration.denominator
         var totalNumerator = 0
 
-        for (index, highlight) in clips.enumerated() {
-            let clipDuration = RationalTime.fromSeconds(highlight.duration, frameRate: frameRate)
-            // Ensure same denominator for accumulation
+        for highlight in clips {
+            let paddedStart = max(0, highlight.startTime - handlePadding)
+            let paddedEnd = min(mediaDuration, highlight.endTime + handlePadding)
+            let paddedDuration = paddedEnd - paddedStart
+
+            let clipDuration = RationalTime.fromSeconds(paddedDuration, frameRate: frameRate)
             if clipDuration.denominator == denom {
                 totalNumerator += clipDuration.numerator
             } else {
                 totalNumerator += clipDuration.numerator * denom / clipDuration.denominator
-            }
-
-            if index < clips.count - 1 {
-                if gapTime.denominator == denom {
-                    totalNumerator += gapTime.numerator
-                } else {
-                    totalNumerator += gapTime.numerator * denom / gapTime.denominator
-                }
             }
         }
 

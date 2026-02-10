@@ -348,6 +348,14 @@ enum AIProvider: String, Codable, CaseIterable {
     case anthropic = "Anthropic (Claude)"
 }
 
+/// How highlights are sorted in the review panel
+enum HighlightSortOrder: String, Codable, CaseIterable {
+    case chronological = "Chronological"
+    case aiSuggested = "AI Suggested"
+    case byRating = "By Rating"
+    case bySpeaker = "By Speaker"
+}
+
 /// App settings
 struct AppSettings: Codable {
     var openAIAPIKey: String
@@ -358,6 +366,8 @@ struct AppSettings: Codable {
     var defaultExportFormat: ExportFormat
     var defaultGapDuration: TimeInterval
     var customPromptAdditions: String
+    var targetDurationSeconds: Int // 0 = unconstrained
+    var sortOrder: HighlightSortOrder
 
     static var `default`: AppSettings {
         AppSettings(
@@ -368,7 +378,9 @@ struct AppSettings: Codable {
             enabledHighlightTypes: Set(HighlightType.allCases),
             defaultExportFormat: .fcpxml,
             defaultGapDuration: 1.0,
-            customPromptAdditions: ""
+            customPromptAdditions: "",
+            targetDurationSeconds: 0,
+            sortOrder: .chronological
         )
     }
 }
@@ -414,6 +426,35 @@ struct CostEstimate {
             totalCost: whisperCost + analysisCost,
             audioDurationMinutes: minutes
         )
+    }
+}
+
+// MARK: - Session Persistence
+
+/// Saved session data for restore without re-processing
+struct SessionData: Codable {
+    let mediaURL: URL
+    let mediaFileName: String
+    let transcription: TranscriptionResult
+    let analysis: AnalysisResult
+    let savedAt: Date
+
+    static func save(_ data: SessionData, for fileName: String) {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("HookCut/Sessions", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("\(fileName).json")
+        if let encoded = try? JSONEncoder().encode(data) {
+            try? encoded.write(to: file)
+        }
+    }
+
+    static func load(for fileName: String) -> SessionData? {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("HookCut/Sessions", isDirectory: true)
+        let file = dir.appendingPathComponent("\(fileName).json")
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        return try? JSONDecoder().decode(SessionData.self, from: data)
     }
 }
 

@@ -81,6 +81,7 @@ struct HighlightDetector {
 
         Rules:
         - Find \(count) highlights (roughly 1-2 per 5 minutes of content)
+        - IMPORTANT: The total duration of ALL highlights combined should be approximately \(settings.targetDurationSeconds > 0 ? "\(settings.targetDurationSeconds) seconds" : "unconstrained"). Select highlights that when combined will fit this target duration. Prefer shorter, punchier clips if the target is short, and include more context if the target is longer.
         - Only include these types: \(enabledTypes)
         - NEVER cut a sentence in half — include the complete thought, even if it's 2-3 sentences
         - Include enough context so the clip makes sense on its own (may need the sentence before the key line)
@@ -154,10 +155,10 @@ struct HighlightDetector {
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 180
+        request.timeoutInterval = 600
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await APISession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw DetectionError.apiError(code, String(data: data, encoding: .utf8) ?? "Unknown")
@@ -193,10 +194,10 @@ struct HighlightDetector {
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 180
+        request.timeoutInterval = 600
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await APISession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw DetectionError.apiError(code, String(data: data, encoding: .utf8) ?? "Unknown")

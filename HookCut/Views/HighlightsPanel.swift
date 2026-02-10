@@ -13,15 +13,20 @@ struct HighlightsPanel: View {
 
     private var filteredHighlights: [Highlight] {
         guard let analysis = appState.analysis else { return [] }
+        var highlights = analysis.highlights
         if let speakerId = selectedSpeakerId {
-            return analysis.highlights.filter { $0.speakerId == speakerId }
+            highlights = highlights.filter { $0.speakerId == speakerId }
         }
-        return analysis.highlights
+        if viewModel.minimumRating > 1 {
+            highlights = highlights.filter { $0.rating >= viewModel.minimumRating }
+        }
+        return highlights
     }
 
     var body: some View {
         VStack(spacing: 0) {
             Divider()
+            filterBar
             HStack(spacing: 0) {
                 speakerSidebar
                     .frame(width: 160)
@@ -30,6 +35,97 @@ struct HighlightsPanel: View {
             }
             statusBar
         }
+        .onKeyPress(.rightArrow) { navigateHighlight(direction: 1); return .handled }
+        .onKeyPress(.leftArrow) { navigateHighlight(direction: -1); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "e")) { _ in approveCurrentHighlight(); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "r")) { _ in rejectCurrentHighlight(); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "p")) { _ in playCurrentHighlight(); return .handled }
+    }
+
+    // MARK: - Filter & Sort Bar
+
+    private var filterBar: some View {
+        HStack(spacing: 16) {
+            // Sort order
+            HStack(spacing: 4) {
+                Text("Sort:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("", selection: Binding(
+                    get: { appState.settings.sortOrder },
+                    set: { order in
+                        appState.settings.sortOrder = order
+                        viewModel.sortHighlights(by: order)
+                    }
+                )) {
+                    ForEach(HighlightSortOrder.allCases, id: \.self) { order in
+                        Text(order.rawValue).tag(order)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 140)
+            }
+
+            // Rating filter
+            HStack(spacing: 4) {
+                Text("Min rating:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("", selection: $viewModel.minimumRating) {
+                    Text("All").tag(1)
+                    Text("2+").tag(2)
+                    Text("3+").tag(3)
+                    Text("4+").tag(4)
+                    Text("5").tag(5)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+            }
+
+            Spacer()
+
+            // Assembled preview
+            if viewModel.isPreviewingAssembled {
+                HStack(spacing: 8) {
+                    Text("Preview: clip \(viewModel.currentPreviewIndex + 1)")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.orange)
+                    Button {
+                        viewModel.stopAssembledPreview()
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(.orange)
+                }
+            } else {
+                Button {
+                    viewModel.playAssembledPreview()
+                } label: {
+                    Label("Preview All", systemImage: "play.rectangle.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(viewModel.approvedClipsCount == 0)
+                .help("Play all approved clips back-to-back")
+            }
+
+            // Smart auto-fit
+            if appState.settings.targetDurationSeconds > 0 {
+                Button {
+                    viewModel.autoFitToTargetDuration()
+                } label: {
+                    Label("Auto-Fit", systemImage: "sparkles")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Auto-select best clips to fit target duration")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.bar)
     }
 
     // MARK: - Speaker Sidebar
@@ -123,6 +219,7 @@ struct HighlightsPanel: View {
         let speakerColor = Color(hex: speaker?.color ?? "#007AFF") ?? .blue
         let isExpanded = expandedHighlightId == highlight.id
 
+        let isSelected = appState.selectedHighlightId == highlight.id
         return VStack(alignment: .leading, spacing: 6) {
             // Top row: speaker + type + rating
             HStack {
@@ -249,6 +346,13 @@ struct HighlightsPanel: View {
         .background(.background.secondary)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .opacity(highlight.isApproved ? 1.0 : 0.6)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 2)
+        )
+        .onTapGesture {
+            appState.selectedHighlightId = highlight.id
+        }
     }
 
     private func starRating(_ highlight: Highlight) -> some View {
@@ -311,5 +415,36 @@ struct HighlightsPanel: View {
             }
         }
         appState.analysis = analysis
+    }
+
+    private func navigateHighlight(direction: Int) {
+        let highlights = filteredHighlights
+        guard !highlights.isEmpty else { return }
+
+        if let currentId = appState.selectedHighlightId,
+           let currentIndex = highlights.firstIndex(where: { $0.id == currentId }) {
+            let newIndex = max(0, min(highlights.count - 1, currentIndex + direction))
+            appState.selectedHighlightId = highlights[newIndex].id
+        } else {
+            appState.selectedHighlightId = highlights.first?.id
+        }
+    }
+
+    private func approveCurrentHighlight() {
+        guard let id = appState.selectedHighlightId,
+              let highlight = filteredHighlights.first(where: { $0.id == id }) else { return }
+        viewModel.approveHighlight(highlight)
+    }
+
+    private func rejectCurrentHighlight() {
+        guard let id = appState.selectedHighlightId,
+              let highlight = filteredHighlights.first(where: { $0.id == id }) else { return }
+        viewModel.rejectHighlight(highlight)
+    }
+
+    private func playCurrentHighlight() {
+        guard let id = appState.selectedHighlightId,
+              let highlight = filteredHighlights.first(where: { $0.id == id }) else { return }
+        viewModel.playHighlight(highlight)
     }
 }

@@ -146,6 +146,29 @@ struct ImportView: View {
         Group {
             if case .idle = appState.processingState {
                 VStack(spacing: 8) {
+                    // Target duration picker
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Target Duration", systemImage: "timer")
+                            .font(.subheadline.weight(.medium))
+
+                        Picker("", selection: $appState.settings.targetDurationSeconds) {
+                            Text("Auto").tag(0)
+                            Text("30s").tag(30)
+                            Text("1 min").tag(60)
+                            Text("2 min").tag(120)
+                            Text("3 min").tag(180)
+                            Text("5 min").tag(300)
+                            Text("10 min").tag(600)
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: appState.settings.targetDurationSeconds) {
+                            appState.saveSettings()
+                        }
+                    }
+                    .padding()
+                    .background(.background.secondary)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
                     Button {
                         viewModel.startAnalysis()
                     } label: {
@@ -162,6 +185,17 @@ struct ImportView: View {
                             .foregroundStyle(.orange)
                     }
                 }
+            } else if case .complete = appState.processingState {
+                // Re-analyze button (keeps transcript, re-runs highlight detection)
+                Button {
+                    viewModel.reAnalyze()
+                } label: {
+                    Label("Re-Analyze Highlights", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .help("Keep transcript, re-run highlight detection with current settings")
             }
         }
     }

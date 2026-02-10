@@ -13,6 +13,9 @@ final class AppViewModel: ObservableObject {
     @Published var showBatchView: Bool = false
     @Published var errorMessage: String?
     @Published var showError: Bool = false
+    @Published var isPreviewingAssembled: Bool = false
+    @Published var minimumRating: Int = 1
+    @Published var currentPreviewIndex: Int = 0
 
     private var timeObserver: Any?
 
@@ -140,6 +143,8 @@ final class AppViewModel: ObservableObject {
 
                 // Step 1: Extract audio
                 appState.processingState = .extractingAudio(progress: 0)
+                // Check for saved session first
+                if loadSession() { return }
                 let audioURL = try await service.extractAudio(from: file.url) { progress in
                     Task { @MainActor in
                         appState.processingState = .extractingAudio(progress: progress)
@@ -178,6 +183,7 @@ final class AppViewModel: ObservableObject {
                 let speakerCount = analysis.speakers.count
                 let highlightCount = analysis.highlights.count
                 appState.processingState = .complete
+                saveSession()
                 _ = speakerCount
                 _ = highlightCount
 
@@ -266,6 +272,154 @@ final class AppViewModel: ObservableObject {
         } catch {
             showErrorMessage("Export failed: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Assembled Preview
+
+    func playAssembledPreview() {
+        guard let appState, let analysis = appState.analysis else { return }
+        let approved = analysis.approvedHighlights
+        guard !approved.isEmpty else { return }
+
+        isPreviewingAssembled = true
+        currentPreviewIndex = 0
+        playClipAtIndex(0, in: approved)
+    }
+
+    func stopAssembledPreview() {
+        isPreviewingAssembled = false
+        player?.pause()
+        isPlaying = false
+        player?.currentItem?.forwardPlaybackEndTime = .invalid
+    }
+
+    private func playClipAtIndex(_ index: Int, in clips: [Highlight]) {
+        guard index < clips.count else {
+            stopAssembledPreview()
+            return
+        }
+        currentPreviewIndex = index
+        let clip = clips[index]
+        seek(to: clip.startTime)
+        player?.play()
+        isPlaying = true
+
+        // Set end time for this clip
+        let endTime = CMTime(seconds: clip.endTime, preferredTimescale: 600)
+        player?.currentItem?.forwardPlaybackEndTime = endTime
+
+        // Schedule next clip
+        let clipDuration = clip.endTime - clip.startTime
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(clipDuration * 1_000_000_000))
+            if isPreviewingAssembled && currentPreviewIndex == index {
+                playClipAtIndex(index + 1, in: clips)
+            }
+        }
+    }
+
+    // MARK: - Smart Auto-Fit
+
+    func autoFitToTargetDuration() {
+        guard let appState, var analysis = appState.analysis else { return }
+        let targetSeconds = TimeInterval(appState.settings.targetDurationSeconds)
+        guard targetSeconds > 0 else { return }
+
+        // Sort by rating descending, then by duration ascending (prefer short punchy clips)
+        let sorted = analysis.highlights.sorted { a, b in
+            if a.rating != b.rating { return a.rating > b.rating }
+            return a.duration < b.duration
+        }
+
+        // Greedily select best clips until we hit target
+        var totalDuration: TimeInterval = 0
+        var selectedIds: Set<UUID> = []
+
+        for highlight in sorted {
+            if totalDuration + highlight.duration <= targetSeconds * 1.1 { // 10% tolerance
+                selectedIds.insert(highlight.id)
+                totalDuration += highlight.duration
+            }
+        }
+
+        // Update all highlights
+        for i in analysis.highlights.indices {
+            analysis.highlights[i].isApproved = selectedIds.contains(analysis.highlights[i].id)
+        }
+        appState.analysis = analysis
+    }
+
+    // MARK: - Session Save/Restore
+
+    func saveSession() {
+        guard let appState, let file = appState.currentFile,
+              let transcription = appState.transcription,
+              let analysis = appState.analysis else { return }
+
+        let session = SessionData(
+            mediaURL: file.url,
+            mediaFileName: file.fileName,
+            transcription: transcription,
+            analysis: analysis,
+            savedAt: Date()
+        )
+        SessionData.save(session, for: file.fileName)
+    }
+
+    func loadSession() -> Bool {
+        guard let appState, let file = appState.currentFile else { return false }
+        guard let session = SessionData.load(for: file.fileName) else { return false }
+
+        appState.transcription = session.transcription
+        appState.analysis = session.analysis
+        appState.processingState = .complete
+        return true
+    }
+
+    // MARK: - Re-Analyze
+
+    func reAnalyze() {
+        guard let appState, let transcript = appState.transcription else { return }
+
+        Task {
+            do {
+                guard let service = appState.transcriptionService else { return }
+                appState.processingState = .findingHighlights
+                let analysis = try await service.findHighlights(
+                    transcript: transcript,
+                    settings: appState.settings
+                )
+                appState.analysis = analysis
+                appState.processingState = .complete
+            } catch {
+                appState.processingState = .error(error.localizedDescription)
+                showErrorMessage(error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - Sort Highlights
+
+    func sortHighlights(by order: HighlightSortOrder) {
+        guard let appState, var analysis = appState.analysis else { return }
+        switch order {
+        case .chronological:
+            analysis.highlights.sort { $0.startTime < $1.startTime }
+        case .aiSuggested:
+            let orderMap = Dictionary(uniqueKeysWithValues: analysis.suggestedTeaserOrder.enumerated().map { ($1, $0) })
+            analysis.highlights.sort { a, b in
+                (orderMap[a.sequenceNumber] ?? 999) < (orderMap[b.sequenceNumber] ?? 999)
+            }
+        case .byRating:
+            analysis.highlights.sort { $0.rating > $1.rating }
+        case .bySpeaker:
+            analysis.highlights.sort { $0.speakerId.uuidString < $1.speakerId.uuidString }
+        }
+        // Re-number
+        for i in analysis.highlights.indices {
+            analysis.highlights[i].sequenceNumber = i + 1
+        }
+        appState.analysis = analysis
     }
 
     // MARK: - Computed Properties
