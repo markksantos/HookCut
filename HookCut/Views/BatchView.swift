@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AVFoundation
 
 /// Batch processing view for handling multiple files
 struct BatchView: View {
@@ -7,6 +8,7 @@ struct BatchView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showFileImporter = false
     @State private var isProcessing = false
+    @State private var currentProcessingIndex: Int?
 
     private let acceptedTypes: [UTType] = [
         .mpeg4Movie, .quickTimeMovie, .movie,
@@ -55,22 +57,36 @@ struct BatchView: View {
                         appState.batchItems.removeAll()
                     }
                     .buttonStyle(.borderless)
+                    .disabled(isProcessing)
 
                     Button {
-                        processBatch()
+                        Task { await processBatch() }
                     } label: {
                         if isProcessing {
-                            ProgressView()
-                                .controlSize(.small)
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                if let idx = currentProcessingIndex {
+                                    Text("\(idx + 1)/\(appState.batchItems.count)")
+                                        .font(.caption)
+                                }
+                            }
                         } else {
                             Label("Process All", systemImage: "play.fill")
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(isProcessing)
+                    .disabled(isProcessing || !hasAPIKey || allComplete)
                 }
             }
             .padding()
+
+            if !hasAPIKey {
+                Text("Set API key in Settings to enable processing")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.bottom, 8)
+            }
         }
         .frame(width: 600, height: 500)
         .fileImporter(
@@ -79,19 +95,21 @@ struct BatchView: View {
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
-                for url in urls {
-                    guard url.startAccessingSecurityScopedResource() else { continue }
-                    defer { url.stopAccessingSecurityScopedResource() }
-                    let info = MediaFileInfo(
-                        url: url,
-                        fileName: url.lastPathComponent,
-                        fileSize: 0,
-                        duration: 0,
-                        isVideoFile: url.pathExtension.lowercased() != "mp3" && url.pathExtension.lowercased() != "wav"
-                    )
-                    appState.batchItems.append(BatchItem(fileInfo: info))
+                Task {
+                    await addFiles(urls)
                 }
             }
+        }
+    }
+
+    private var hasAPIKey: Bool {
+        !appState.settings.openAIAPIKey.isEmpty
+    }
+
+    private var allComplete: Bool {
+        appState.batchItems.allSatisfy { item in
+            if case .complete = item.state { return true }
+            return false
         }
     }
 
@@ -104,7 +122,7 @@ struct BatchView: View {
             Text("No files added")
                 .font(.title3)
                 .foregroundStyle(.secondary)
-            Text("Add files to process them in batch")
+            Text("Add video or audio files to process them in batch")
                 .font(.callout)
                 .foregroundStyle(.tertiary)
             Spacer()
@@ -120,18 +138,37 @@ struct BatchView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.fileInfo.fileName)
                             .font(.callout)
-                        statusLabel(for: item.state)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            statusLabel(for: item.state)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if item.fileInfo.duration > 0 {
+                                Text(item.fileInfo.duration.mmss)
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            if item.fileInfo.fileSize > 0 {
+                                Text(item.fileInfo.fileSize.formattedFileSize)
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
                     }
 
                     Spacer()
+
+                    if let analysis = item.analysis {
+                        Text("\(analysis.highlights.count) highlights")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
 
                     progressIndicator(for: item.state)
                 }
                 .padding(.vertical, 4)
             }
             .onDelete { indices in
+                guard !isProcessing else { return }
                 appState.batchItems.remove(atOffsets: indices)
             }
         }
@@ -173,6 +210,7 @@ struct BatchView: View {
                 Text("Complete")
             case .error(let msg):
                 Text("Error: \(msg)")
+                    .lineLimit(1)
             }
         }
     }
@@ -194,10 +232,98 @@ struct BatchView: View {
         }
     }
 
-    private func processBatch() {
+    // MARK: - File Handling
+
+    @MainActor
+    private func addFiles(_ urls: [URL]) async {
+        for url in urls {
+            guard url.startAccessingSecurityScopedResource() else { continue }
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            // Probe actual file info
+            let resources = try? url.resourceValues(forKeys: [.fileSizeKey])
+            let fileSize = Int64(resources?.fileSize ?? 0)
+
+            var duration: TimeInterval = 0
+            var isVideo = false
+            let asset = AVAsset(url: url)
+            if let durationCM = try? await asset.load(.duration) {
+                duration = CMTimeGetSeconds(durationCM)
+            }
+            if let videoTracks = try? await asset.loadTracks(withMediaType: .video) {
+                isVideo = !videoTracks.isEmpty
+            }
+
+            let info = MediaFileInfo(
+                url: url,
+                fileName: url.lastPathComponent,
+                fileSize: fileSize,
+                duration: duration,
+                isVideoFile: isVideo
+            )
+            appState.batchItems.append(BatchItem(fileInfo: info))
+        }
+    }
+
+    // MARK: - Batch Processing
+
+    @MainActor
+    private func processBatch() async {
+        guard let service = appState.transcriptionService else { return }
         isProcessing = true
-        // Batch processing would be implemented via the transcription service
-        // For now, mark as placeholder until services are connected
+
+        for i in appState.batchItems.indices {
+            guard case .idle = appState.batchItems[i].state else { continue }
+            currentProcessingIndex = i
+
+            do {
+                let item = appState.batchItems[i]
+
+                // Extract audio
+                appState.batchItems[i].state = .extractingAudio(progress: 0)
+                let audioURL = try await service.extractAudio(from: item.fileInfo.url) { progress in
+                    Task { @MainActor in
+                        self.appState.batchItems[i].state = .extractingAudio(progress: progress)
+                    }
+                }
+
+                // Transcribe
+                appState.batchItems[i].state = .transcribing(progress: 0, estimatedRemaining: nil)
+                let transcript = try await service.transcribe(
+                    audioURL: audioURL,
+                    apiKey: appState.settings.openAIAPIKey
+                ) { progress in
+                    Task { @MainActor in
+                        self.appState.batchItems[i].state = .transcribing(progress: progress, estimatedRemaining: nil)
+                    }
+                }
+
+                // Identify speakers
+                appState.batchItems[i].state = .identifyingSpeakers
+                let diarized = try await service.identifySpeakers(
+                    transcript: transcript,
+                    apiKey: appState.settings.openAIAPIKey,
+                    provider: appState.settings.aiProvider,
+                    anthropicKey: appState.settings.anthropicAPIKey.isEmpty ? nil : appState.settings.anthropicAPIKey
+                )
+                appState.batchItems[i].transcription = diarized
+
+                // Find highlights
+                appState.batchItems[i].state = .findingHighlights
+                let analysis = try await service.findHighlights(
+                    transcript: diarized,
+                    settings: appState.settings,
+                    template: appState.selectedTemplate
+                )
+                appState.batchItems[i].analysis = analysis
+                appState.batchItems[i].state = .complete
+
+            } catch {
+                appState.batchItems[i].state = .error(error.localizedDescription)
+            }
+        }
+
+        currentProcessingIndex = nil
         isProcessing = false
     }
 }

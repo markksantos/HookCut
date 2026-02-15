@@ -11,7 +11,7 @@ let package = Package(
         .executableTarget(
             name: "HookCut",
             path: "HookCut",
-            exclude: ["Info.plist"]
+            exclude: ["Info.plist", "HookCut.entitlements"]
         )
     ]
 )

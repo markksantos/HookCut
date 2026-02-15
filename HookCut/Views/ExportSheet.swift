@@ -13,6 +13,7 @@ struct ExportSheet: View {
     @State private var includeMarkers: Bool = true
     @State private var isExporting: Bool = false
     @State private var exportSuccess: Bool = false
+    @State private var exportedURL: URL?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,7 +43,16 @@ struct ExportSheet: View {
                         }
                     }
 
+                    Text(formatDescription(exportFormat))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+
                     TextField("Project Name", text: $projectName)
+                    if !isProjectNameValid {
+                        Text("Project name cannot be empty or contain path separators")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
 
                     Picker("Gap Between Clips", selection: $gapDuration) {
                         Text("None").tag(0.0 as TimeInterval)
@@ -100,9 +110,21 @@ struct ExportSheet: View {
             // Action buttons
             HStack {
                 if exportSuccess {
-                    Label("Export successful!", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.callout)
+                    HStack(spacing: 8) {
+                        Label("Export successful!", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.callout)
+
+                        if exportedURL != nil {
+                            Button("Show in Finder") {
+                                if let url = exportedURL {
+                                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.callout)
+                        }
+                    }
                 }
 
                 Spacer()
@@ -112,19 +134,27 @@ struct ExportSheet: View {
                 }
                 .keyboardShortcut(.cancelAction)
 
-                Button {
-                    performExport()
-                } label: {
-                    if isExporting {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Text("Export")
+                if !exportSuccess {
+                    Button {
+                        performExport()
+                    } label: {
+                        if isExporting {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text("Export")
+                        }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isExporting || !isProjectNameValid || (appState.analysis?.approvedHighlights.isEmpty ?? true))
+                } else {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(isExporting || (appState.analysis?.approvedHighlights.isEmpty ?? true))
             }
             .padding()
         }
@@ -136,6 +166,23 @@ struct ExportSheet: View {
                 let name = (fileName as NSString).deletingPathExtension
                 projectName = "\(name) - Highlights"
             }
+        }
+    }
+
+    private var isProjectNameValid: Bool {
+        let trimmed = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let invalidChars = CharacterSet(charactersIn: "/\\:*?\"<>|")
+        return !trimmed.isEmpty && trimmed.rangeOfCharacter(from: invalidChars) == nil
+    }
+
+    private func formatDescription(_ format: ExportFormat) -> String {
+        switch format {
+        case .fcpxml: return "Final Cut Pro project with clips on timeline"
+        case .premiereXML: return "Adobe Premiere Pro compatible XML interchange"
+        case .edl: return "CMX 3600 EDL for DaVinci Resolve and other NLEs"
+        case .csv: return "Spreadsheet with all highlight details"
+        case .srt: return "Subtitle file with highlight timecodes"
+        case .plainText: return "Full transcript with highlight markers"
         }
     }
 
@@ -156,13 +203,12 @@ struct ExportSheet: View {
                 projectName: projectName
             )
 
-            viewModel.exportHighlights(format: exportFormat, config: config, to: url)
+            let success = viewModel.exportHighlights(format: exportFormat, config: config, to: url)
 
             isExporting = false
-            exportSuccess = true
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                dismiss()
+            exportSuccess = success
+            if success {
+                exportedURL = url
             }
         }
     }

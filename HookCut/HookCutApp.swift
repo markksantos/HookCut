@@ -8,7 +8,7 @@ struct HookCutApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
-                .frame(minWidth: 1200, minHeight: 800)
+                .frame(minWidth: 1000, minHeight: 650)
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1400, height: 900)
@@ -33,9 +33,8 @@ class AppState: ObservableObject {
     @Published var promptTemplates: [PromptTemplate] = PromptTemplate.builtInTemplates
     @Published var selectedTemplate: PromptTemplate?
 
-    // Services - injected so teammates can implement independently
+    // Services
     var transcriptionService: TranscriptionServiceProtocol?
-    var analysisService: (any TranscriptionServiceProtocol)?  // analysis integrated into transcription service
     var exportService: ExportServiceProtocol?
 
     init() {
@@ -56,7 +55,7 @@ protocol TranscriptionServiceProtocol {
     func extractAudio(from url: URL, progressHandler: @escaping (Double) -> Void) async throws -> URL
     func transcribe(audioURL: URL, apiKey: String, progressHandler: @escaping (Double) -> Void) async throws -> TranscriptionResult
     func identifySpeakers(transcript: TranscriptionResult, apiKey: String, provider: AIProvider, anthropicKey: String?) async throws -> TranscriptionResult
-    func findHighlights(transcript: TranscriptionResult, settings: AppSettings) async throws -> AnalysisResult
+    func findHighlights(transcript: TranscriptionResult, settings: AppSettings, template: PromptTemplate?) async throws -> AnalysisResult
 }
 
 /// Protocol for export pipeline (Teammate 2)

@@ -24,6 +24,8 @@
 	<string></string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.video</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright 2025. All rights reserved.</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

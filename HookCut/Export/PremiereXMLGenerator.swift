@@ -180,10 +180,16 @@ struct PremiereXMLGenerator {
     }
 
     private func sanitize(_ string: String) -> String {
+        var s = string
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
         let maxLength = 200
-        if string.count > maxLength {
-            return String(string.prefix(maxLength)) + "..."
+        if s.count > maxLength {
+            s = String(s.prefix(maxLength)) + "..."
         }
-        return string
+        return s
     }
 }

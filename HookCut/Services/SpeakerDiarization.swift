@@ -85,7 +85,7 @@ struct SpeakerDiarization {
 
     // MARK: - OpenAI
 
-    private static func callOpenAI(prompt: String, apiKey: String) async throws -> String {
+    private static func callOpenAI(prompt: String, apiKey: String, retryCount: Int = 0) async throws -> String {
         let url = URL(string: "https://api.openai.com/v1/chat/completions")!
         let requestBody: [String: Any] = [
             "model": "gpt-4o",
@@ -108,6 +108,13 @@ struct SpeakerDiarization {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw DiarizationError.networkError("Invalid response")
         }
+
+        if httpResponse.statusCode == 429, retryCount < 3 {
+            let delay = UInt64(pow(2.0, Double(retryCount + 1))) * 1_000_000_000
+            try await Task.sleep(nanoseconds: delay)
+            return try await callOpenAI(prompt: prompt, apiKey: apiKey, retryCount: retryCount + 1)
+        }
+
         guard httpResponse.statusCode == 200 else {
             throw DiarizationError.apiError(httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "Unknown")
         }
@@ -124,7 +131,7 @@ struct SpeakerDiarization {
 
     // MARK: - Anthropic
 
-    private static func callAnthropic(prompt: String, apiKey: String) async throws -> String {
+    private static func callAnthropic(prompt: String, apiKey: String, retryCount: Int = 0) async throws -> String {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
         let requestBody: [String: Any] = [
             "model": "claude-sonnet-4-5-20250929",
@@ -145,6 +152,13 @@ struct SpeakerDiarization {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw DiarizationError.networkError("Invalid response")
         }
+
+        if httpResponse.statusCode == 429, retryCount < 3 {
+            let delay = UInt64(pow(2.0, Double(retryCount + 1))) * 1_000_000_000
+            try await Task.sleep(nanoseconds: delay)
+            return try await callAnthropic(prompt: prompt, apiKey: apiKey, retryCount: retryCount + 1)
+        }
+
         guard httpResponse.statusCode == 200 else {
             throw DiarizationError.apiError(httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "Unknown")
         }

@@ -18,13 +18,23 @@ final class AppViewModel: ObservableObject {
     @Published var currentPreviewIndex: Int = 0
 
     private var timeObserver: Any?
+    private var previewGenerationId: UUID = UUID()
+    private var analysisTask: Task<Void, Never>?
 
     weak var appState: AppState?
 
     // MARK: - File Import
 
+    func resetForNewFile() {
+        stopAssembledPreview()
+        cleanupPlayer()
+    }
+
     func importFile(url: URL) {
         guard let appState else { return }
+
+        // Clean up previous state
+        resetForNewFile()
 
         let resources = try? url.resourceValues(forKeys: [.fileSizeKey])
         let fileSize = Int64(resources?.fileSize ?? 0)
@@ -79,10 +89,10 @@ final class AppViewModel: ObservableObject {
             appState.processingState = .idle
             appState.transcription = nil
             appState.analysis = nil
+            appState.selectedHighlightId = nil
 
-            if isVideo {
-                setupPlayer(url: url)
-            }
+            // Set up player for both video and audio files
+            setupPlayer(url: url)
         }
     }
 
@@ -98,7 +108,12 @@ final class AppViewModel: ObservableObject {
             queue: .main
         ) { [weak self] time in
             Task { @MainActor in
-                self?.playbackTime = CMTimeGetSeconds(time)
+                guard let self else { return }
+                self.playbackTime = CMTimeGetSeconds(time)
+                let playerIsPlaying = self.player?.rate != 0
+                if self.isPlaying != playerIsPlaying {
+                    self.isPlaying = playerIsPlaying
+                }
             }
         }
     }
@@ -131,10 +146,16 @@ final class AppViewModel: ObservableObject {
 
     // MARK: - Analysis Pipeline
 
+    func cancelAnalysis() {
+        analysisTask?.cancel()
+        analysisTask = nil
+        appState?.processingState = .idle
+    }
+
     func startAnalysis() {
         guard let appState, let file = appState.currentFile else { return }
 
-        Task {
+        analysisTask = Task {
             do {
                 guard let service = appState.transcriptionService else {
                     showErrorMessage("Transcription service not configured. Please set API keys in Settings.")
@@ -145,6 +166,7 @@ final class AppViewModel: ObservableObject {
                 appState.processingState = .extractingAudio(progress: 0)
                 // Check for saved session first
                 if loadSession() { return }
+                try Task.checkCancellation()
                 let audioURL = try await service.extractAudio(from: file.url) { progress in
                     Task { @MainActor in
                         appState.processingState = .extractingAudio(progress: progress)
@@ -152,6 +174,7 @@ final class AppViewModel: ObservableObject {
                 }
 
                 // Step 2: Transcribe
+                try Task.checkCancellation()
                 appState.processingState = .transcribing(progress: 0, estimatedRemaining: nil)
                 let apiKey = appState.settings.openAIAPIKey
                 let transcript = try await service.transcribe(audioURL: audioURL, apiKey: apiKey) { progress in
@@ -162,6 +185,7 @@ final class AppViewModel: ObservableObject {
                 }
 
                 // Step 3: Identify speakers
+                try Task.checkCancellation()
                 appState.processingState = .identifyingSpeakers
                 let diarized = try await service.identifySpeakers(
                     transcript: transcript,
@@ -172,21 +196,21 @@ final class AppViewModel: ObservableObject {
                 appState.transcription = diarized
 
                 // Step 4: Find highlights
+                try Task.checkCancellation()
                 appState.processingState = .findingHighlights
                 let analysis = try await service.findHighlights(
                     transcript: diarized,
-                    settings: appState.settings
+                    settings: appState.settings,
+                    template: appState.selectedTemplate
                 )
                 appState.analysis = analysis
 
                 // Done
-                let speakerCount = analysis.speakers.count
-                let highlightCount = analysis.highlights.count
                 appState.processingState = .complete
                 saveSession()
-                _ = speakerCount
-                _ = highlightCount
 
+            } catch is CancellationError {
+                // Cancelled by user — state already reset by cancelAnalysis()
             } catch {
                 appState.processingState = .error(error.localizedDescription)
                 showErrorMessage(error.localizedDescription)
@@ -222,9 +246,26 @@ final class AppViewModel: ObservableObject {
 
     func adjustHighlightTime(_ highlight: Highlight, startDelta: TimeInterval, endDelta: TimeInterval) {
         guard let appState, var analysis = appState.analysis else { return }
+        let mediaDuration = appState.currentFile?.duration ?? .greatestFiniteMagnitude
         if let idx = analysis.highlights.firstIndex(where: { $0.id == highlight.id }) {
-            analysis.highlights[idx].startTime += startDelta
-            analysis.highlights[idx].endTime += endDelta
+            var newStart = analysis.highlights[idx].startTime + startDelta
+            var newEnd = analysis.highlights[idx].endTime + endDelta
+
+            // Clamp to valid range
+            newStart = max(0, min(newStart, mediaDuration))
+            newEnd = max(0, min(newEnd, mediaDuration))
+
+            // Enforce minimum 0.5s duration
+            if newEnd - newStart < 0.5 {
+                if endDelta != 0 {
+                    newEnd = min(newStart + 0.5, mediaDuration)
+                } else {
+                    newStart = max(newEnd - 0.5, 0)
+                }
+            }
+
+            analysis.highlights[idx].startTime = newStart
+            analysis.highlights[idx].endTime = newEnd
             appState.analysis = analysis
         }
     }
@@ -243,13 +284,14 @@ final class AppViewModel: ObservableObject {
 
     // MARK: - Export
 
-    func exportHighlights(format: ExportFormat, config: ExportConfig, to url: URL) {
+    @discardableResult
+    func exportHighlights(format: ExportFormat, config: ExportConfig, to url: URL) -> Bool {
         guard let appState,
               let analysis = appState.analysis,
               let file = appState.currentFile,
               let exportService = appState.exportService else {
             showErrorMessage("Export service not available.")
-            return
+            return false
         }
 
         do {
@@ -269,8 +311,10 @@ final class AppViewModel: ObservableObject {
                 data = try exportService.exportPlainText(analysis: analysis, transcript: appState.transcription)
             }
             try data.write(to: url)
+            return true
         } catch {
             showErrorMessage("Export failed: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -278,23 +322,26 @@ final class AppViewModel: ObservableObject {
 
     func playAssembledPreview() {
         guard let appState, let analysis = appState.analysis else { return }
-        let approved = analysis.approvedHighlights
+        let approved = analysis.approvedHighlights.sorted(by: { $0.startTime < $1.startTime })
         guard !approved.isEmpty else { return }
 
+        let genId = UUID()
+        previewGenerationId = genId
         isPreviewingAssembled = true
         currentPreviewIndex = 0
-        playClipAtIndex(0, in: approved)
+        playClipAtIndex(0, in: approved, generationId: genId)
     }
 
     func stopAssembledPreview() {
+        previewGenerationId = UUID() // Invalidate any pending scheduled clips
         isPreviewingAssembled = false
         player?.pause()
         isPlaying = false
         player?.currentItem?.forwardPlaybackEndTime = .invalid
     }
 
-    private func playClipAtIndex(_ index: Int, in clips: [Highlight]) {
-        guard index < clips.count else {
+    private func playClipAtIndex(_ index: Int, in clips: [Highlight], generationId: UUID) {
+        guard index < clips.count, generationId == previewGenerationId else {
             stopAssembledPreview()
             return
         }
@@ -308,12 +355,14 @@ final class AppViewModel: ObservableObject {
         let endTime = CMTime(seconds: clip.endTime, preferredTimescale: 600)
         player?.currentItem?.forwardPlaybackEndTime = endTime
 
-        // Schedule next clip
+        // Schedule next clip with generation check to prevent stale callbacks
         let clipDuration = clip.endTime - clip.startTime
+        let capturedGenId = generationId
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(clipDuration * 1_000_000_000))
-            if isPreviewingAssembled && currentPreviewIndex == index {
-                playClipAtIndex(index + 1, in: clips)
+            try? await Task.sleep(nanoseconds: UInt64(round(clipDuration * 1_000_000_000)))
+            // Only advance if this preview session is still active
+            if isPreviewingAssembled && previewGenerationId == capturedGenId {
+                playClipAtIndex(index + 1, in: clips, generationId: capturedGenId)
             }
         }
     }
@@ -370,6 +419,9 @@ final class AppViewModel: ObservableObject {
         guard let appState, let file = appState.currentFile else { return false }
         guard let session = SessionData.load(for: file.fileName) else { return false }
 
+        // Verify the media file still exists at its original path
+        guard FileManager.default.fileExists(atPath: file.url.path) else { return false }
+
         appState.transcription = session.transcription
         appState.analysis = session.analysis
         appState.processingState = .complete
@@ -387,10 +439,12 @@ final class AppViewModel: ObservableObject {
                 appState.processingState = .findingHighlights
                 let analysis = try await service.findHighlights(
                     transcript: transcript,
-                    settings: appState.settings
+                    settings: appState.settings,
+                    template: appState.selectedTemplate
                 )
                 appState.analysis = analysis
                 appState.processingState = .complete
+                saveSession()
             } catch {
                 appState.processingState = .error(error.localizedDescription)
                 showErrorMessage(error.localizedDescription)
@@ -434,17 +488,13 @@ final class AppViewModel: ObservableObject {
 
     var hasAPIKey: Bool {
         guard let appState else { return false }
-        switch appState.settings.aiProvider {
-        case .openAI:
-            return !appState.settings.openAIAPIKey.isEmpty
-        case .anthropic:
+        // OpenAI key is always required for Whisper transcription
+        guard !appState.settings.openAIAPIKey.isEmpty else { return false }
+        // If using Anthropic for analysis, also need an Anthropic key
+        if appState.settings.aiProvider == .anthropic {
             return !appState.settings.anthropicAPIKey.isEmpty
         }
-    }
-
-    var costEstimate: CostEstimate? {
-        guard let duration = appState?.currentFile?.duration, duration > 0 else { return nil }
-        return CostEstimate.estimate(durationSeconds: duration)
+        return true
     }
 
     // MARK: - Helpers

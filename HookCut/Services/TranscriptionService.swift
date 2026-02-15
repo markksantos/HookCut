@@ -38,11 +38,13 @@ final class TranscriptionService: TranscriptionServiceProtocol {
 
     func findHighlights(
         transcript: TranscriptionResult,
-        settings: AppSettings
+        settings: AppSettings,
+        template: PromptTemplate? = nil
     ) async throws -> AnalysisResult {
         try await HighlightDetector.findHighlights(
             transcript: transcript,
-            settings: settings
+            settings: settings,
+            templateOverride: template
         )
     }
 }

@@ -14,10 +14,8 @@ struct PlainTextExporter {
         output += "========================\n\n"
 
         if let transcript = transcript {
-            // Full transcript with highlight markers
             output += buildAnnotatedTranscript(segments: transcript.segments, highlights: highlights, speakerMap: speakerMap)
         } else {
-            // No transcript available; list highlights only
             output += buildHighlightList(highlights: highlights, speakerMap: speakerMap)
         }
 
@@ -35,43 +33,40 @@ struct PlainTextExporter {
         speakerMap: [UUID: String]
     ) -> String {
         var result = ""
-        var highlightIndex = 0
-        var insideHighlight = false
+        var nextHighlightIdx = 0
+        var currentHighlightIdx: Int? = nil
 
         for segment in segments {
             let speaker = segment.speaker ?? "Unknown"
-            let segStart = segment.start
-            let segEnd = segment.end
 
-            // Check if a highlight starts at or before this segment
-            while highlightIndex < highlights.count {
-                let h = highlights[highlightIndex]
-
-                if !insideHighlight && h.startTime <= segStart {
+            // Open a new highlight marker if this segment overlaps with the next unprocessed highlight
+            if currentHighlightIdx == nil, nextHighlightIdx < highlights.count {
+                let h = highlights[nextHighlightIdx]
+                // Highlight overlaps this segment if it starts before the segment ends
+                // and hasn't already ended before the segment starts
+                if h.startTime < segment.end + 0.5 && h.endTime > segment.start - 0.5 {
                     let hSpeaker = speakerMap[h.speakerId] ?? "Unknown"
-                    result += "[HIGHLIGHT START - \(h.type.displayName) (\(h.rating)/5) by \(hSpeaker)]\n"
-                    insideHighlight = true
+                    result += "\n[HIGHLIGHT START - \(h.type.displayName) (\(h.rating)/5) by \(hSpeaker)]\n"
+                    currentHighlightIdx = nextHighlightIdx
                 }
-
-                if insideHighlight && h.endTime <= segEnd {
-                    // This highlight ends within or at this segment
-                    result += "[\(speaker)] \(segment.text)\n"
-                    result += "[HIGHLIGHT END]\n\n"
-                    insideHighlight = false
-                    highlightIndex += 1
-                    continue
-                }
-
-                break
             }
 
-            if !insideHighlight || (insideHighlight && highlightIndex < highlights.count && highlights[highlightIndex].endTime > segEnd) {
-                result += "[\(speaker)] \(segment.text)\n"
+            // Write the segment line
+            result += "[\(speaker)] \(segment.text)\n"
+
+            // Close the highlight if it ends within this segment
+            if let idx = currentHighlightIdx {
+                let h = highlights[idx]
+                if h.endTime <= segment.end + 0.5 {
+                    result += "[HIGHLIGHT END]\n\n"
+                    currentHighlightIdx = nil
+                    nextHighlightIdx = idx + 1
+                }
             }
         }
 
         // Close any still-open highlight
-        if insideHighlight {
+        if currentHighlightIdx != nil {
             result += "[HIGHLIGHT END]\n"
         }
 

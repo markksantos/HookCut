@@ -9,13 +9,12 @@ struct VideoPlayerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let player = viewModel.player, appState.currentFile?.isVideoFile == true {
+            if appState.currentFile?.isVideoFile == true, let player = viewModel.player {
                 AVPlayerViewRepresentable(player: player)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-
                 timecodeBar
             } else if appState.currentFile != nil {
-                // Audio-only file
+                // Audio-only file (player exists for playback controls)
                 audioPlaceholder
                 timecodeBar
             } else {

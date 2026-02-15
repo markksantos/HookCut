@@ -124,6 +124,12 @@ struct RationalTime: Codable, Equatable {
     let numerator: Int
     let denominator: Int
 
+    init(numerator: Int, denominator: Int) {
+        precondition(denominator > 0, "RationalTime denominator must be positive")
+        self.numerator = numerator
+        self.denominator = denominator
+    }
+
     var seconds: Double {
         Double(numerator) / Double(denominator)
     }
@@ -131,6 +137,13 @@ struct RationalTime: Codable, Equatable {
     /// FCPXML string representation e.g. "1001/30000s"
     var fcpxmlString: String {
         "\(numerator)/\(denominator)s"
+    }
+
+    /// Reduce fraction using GCD to prevent numerator bloat
+    var reduced: RationalTime {
+        let divisor = Self.gcd(abs(numerator), abs(denominator))
+        guard divisor > 1 else { return self }
+        return RationalTime(numerator: numerator / divisor, denominator: denominator / divisor)
     }
 
     /// Create rational time from seconds, snapped to nearest frame boundary
@@ -141,6 +154,10 @@ struct RationalTime: Codable, Equatable {
             numerator: frameCount * fd.numerator,
             denominator: fd.denominator
         )
+    }
+
+    private static func gcd(_ a: Int, _ b: Int) -> Int {
+        b == 0 ? a : gcd(b, a % b)
     }
 }
 
@@ -267,11 +284,11 @@ struct Highlight: Codable, Identifiable {
         self.id = id
         self.sequenceNumber = sequenceNumber
         self.type = type
-        self.rating = rating
+        self.rating = max(1, min(5, rating))
         self.text = text
         self.context = context
         self.startTime = startTime
-        self.endTime = endTime
+        self.endTime = max(startTime + 0.1, endTime) // Ensure positive duration
         self.speakerId = speakerId
         self.isApproved = isApproved
     }
@@ -439,20 +456,30 @@ struct SessionData: Codable {
     let analysis: AnalysisResult
     let savedAt: Date
 
+    /// Sanitize a file name by replacing path-unsafe characters
+    private static func sanitizedFileName(_ name: String) -> String {
+        let unsafe = CharacterSet(charactersIn: "/:\\?%*|\"<>")
+        return name.unicodeScalars
+            .map { unsafe.contains($0) ? "_" : String($0) }
+            .joined()
+    }
+
     static func save(_ data: SessionData, for fileName: String) {
+        let safe = sanitizedFileName(fileName)
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("HookCut/Sessions", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("\(fileName).json")
+        let file = dir.appendingPathComponent("\(safe).json")
         if let encoded = try? JSONEncoder().encode(data) {
             try? encoded.write(to: file)
         }
     }
 
     static func load(for fileName: String) -> SessionData? {
+        let safe = sanitizedFileName(fileName)
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("HookCut/Sessions", isDirectory: true)
-        let file = dir.appendingPathComponent("\(fileName).json")
+        let file = dir.appendingPathComponent("\(safe).json")
         guard let data = try? Data(contentsOf: file) else { return nil }
         return try? JSONDecoder().decode(SessionData.self, from: data)
     }

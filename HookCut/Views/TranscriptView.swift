@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Right sidebar showing scrollable transcript with speaker labels and timestamps
 struct TranscriptView: View {
@@ -114,6 +115,17 @@ struct TranscriptView: View {
                 .fill(segmentBackground(isHighlighted: isHighlighted, isCurrent: isCurrent))
         }
         .contentShape(Rectangle())
+        .contextMenu {
+            Button("Copy Text") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(segment.text, forType: .string)
+            }
+            Button("Copy with Timestamp") {
+                let text = "[\(segment.start.mmss)] \(segment.text)"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+        }
     }
 
     private func speakerBadge(_ name: String) -> some View {

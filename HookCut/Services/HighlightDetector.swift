@@ -80,7 +80,7 @@ struct HighlightDetector {
         - Humor: genuinely funny moments
 
         Rules:
-        - Find \(count) highlights (roughly 1-2 per 5 minutes of content)
+        - Find \(count > 0 ? "\(count) highlights" : "as many highlights as you think are worthy — use your expert judgment based on episode length and content quality, roughly 1-2 per 5 minutes")
         - IMPORTANT: The total duration of ALL highlights combined should be approximately \(settings.targetDurationSeconds > 0 ? "\(settings.targetDurationSeconds) seconds" : "unconstrained"). Select highlights that when combined will fit this target duration. Prefer shorter, punchier clips if the target is short, and include more context if the target is longer.
         - Only include these types: \(enabledTypes)
         - NEVER cut a sentence in half — include the complete thought, even if it's 2-3 sentences
@@ -137,7 +137,8 @@ struct HighlightDetector {
     private static func callOpenAI(
         systemPrompt: String,
         userPrompt: String,
-        apiKey: String
+        apiKey: String,
+        retryCount: Int = 0
     ) async throws -> String {
         let url = URL(string: "https://api.openai.com/v1/chat/completions")!
         let requestBody: [String: Any] = [
@@ -159,9 +160,18 @@ struct HighlightDetector {
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
         let (data, response) = try await APISession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            throw DetectionError.apiError(code, String(data: data, encoding: .utf8) ?? "Unknown")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw DetectionError.apiError(0, "Invalid response")
+        }
+
+        if httpResponse.statusCode == 429, retryCount < 3 {
+            let delay = UInt64(pow(2.0, Double(retryCount + 1))) * 1_000_000_000
+            try await Task.sleep(nanoseconds: delay)
+            return try await callOpenAI(systemPrompt: systemPrompt, userPrompt: userPrompt, apiKey: apiKey, retryCount: retryCount + 1)
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            throw DetectionError.apiError(httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "Unknown")
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -179,7 +189,8 @@ struct HighlightDetector {
     private static func callAnthropic(
         systemPrompt: String,
         userPrompt: String,
-        apiKey: String
+        apiKey: String,
+        retryCount: Int = 0
     ) async throws -> String {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
         let requestBody: [String: Any] = [
@@ -198,9 +209,18 @@ struct HighlightDetector {
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
         let (data, response) = try await APISession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            throw DetectionError.apiError(code, String(data: data, encoding: .utf8) ?? "Unknown")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw DetectionError.apiError(0, "Invalid response")
+        }
+
+        if httpResponse.statusCode == 429, retryCount < 3 {
+            let delay = UInt64(pow(2.0, Double(retryCount + 1))) * 1_000_000_000
+            try await Task.sleep(nanoseconds: delay)
+            return try await callAnthropic(systemPrompt: systemPrompt, userPrompt: userPrompt, apiKey: apiKey, retryCount: retryCount + 1)
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            throw DetectionError.apiError(httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "Unknown")
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],

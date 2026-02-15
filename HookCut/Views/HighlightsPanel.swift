@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Bottom panel showing highlight cards with speaker filtering and approval controls
 struct HighlightsPanel: View {
@@ -122,10 +123,34 @@ struct HighlightsPanel: View {
                 .controlSize(.small)
                 .help("Auto-select best clips to fit target duration")
             }
+
+            Divider()
+                .frame(height: 16)
+
+            // Keyboard shortcut hints
+            HStack(spacing: 8) {
+                shortcutHint("E", "Approve")
+                shortcutHint("R", "Reject")
+                shortcutHint("P", "Play")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.bar)
+    }
+
+    private func shortcutHint(_ key: String, _ action: String) -> some View {
+        HStack(spacing: 2) {
+            Text(key)
+                .font(.caption2.weight(.bold).monospaced())
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(.secondary.opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+            Text(action)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
     }
 
     // MARK: - Speaker Sidebar
@@ -147,7 +172,9 @@ struct HighlightsPanel: View {
                     Text("All Speakers")
                         .font(.callout)
                     Spacer()
-                    Text("\(appState.analysis?.highlights.count ?? 0)")
+                    let total = appState.analysis?.highlights.count ?? 0
+                    let approved = appState.analysis?.approvedHighlights.count ?? 0
+                    Text("\(approved)/\(total)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -353,14 +380,39 @@ struct HighlightsPanel: View {
         .onTapGesture {
             appState.selectedHighlightId = highlight.id
         }
+        .contextMenu {
+            Button("Copy Text") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(highlight.text, forType: .string)
+            }
+            Button("Copy Timecodes") {
+                let timecodes = "\(highlight.startTime.mmss) - \(highlight.endTime.mmss)"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(timecodes, forType: .string)
+            }
+            Divider()
+            Button("Play") {
+                viewModel.playHighlight(highlight)
+            }
+            Divider()
+            Button(highlight.isApproved ? "Reject" : "Approve") {
+                if highlight.isApproved {
+                    viewModel.rejectHighlight(highlight)
+                } else {
+                    viewModel.approveHighlight(highlight)
+                }
+            }
+        }
     }
 
     private func starRating(_ highlight: Highlight) -> some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 1) {
             ForEach(1...5, id: \.self) { star in
                 Image(systemName: star <= highlight.rating ? "star.fill" : "star")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(star <= highlight.rating ? .yellow : .secondary.opacity(0.3))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
                     .onTapGesture {
                         viewModel.updateHighlightRating(highlight, rating: star)
                     }

@@ -27,6 +27,7 @@ struct FCPXMLGenerator {
         formatEl.addAttribute(attr("frameDuration", frameRate.frameDuration.fcpxmlString))
         formatEl.addAttribute(attr("width", String(width)))
         formatEl.addAttribute(attr("height", String(height)))
+        formatEl.addAttribute(attr("colorSpace", "1-1-1 (Rec. 709)"))
         resources.addChild(formatEl)
 
         let totalDuration = RationalTime.fromSeconds(mediaFile.duration, frameRate: frameRate)
@@ -162,20 +163,27 @@ struct FCPXMLGenerator {
     }
 
     private func sanitizeForXML(_ string: String) -> String {
+        var s = string
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
         let maxLength = 200
-        if string.count > maxLength {
-            return String(string.prefix(maxLength)) + "..."
+        if s.count > maxLength {
+            s = String(s.prefix(maxLength)) + "..."
         }
-        return string
+        return s
     }
 
     private func addRationalTimes(_ a: RationalTime, _ b: RationalTime, denominator: Int) -> RationalTime {
         if a.denominator == b.denominator {
-            return RationalTime(numerator: a.numerator + b.numerator, denominator: a.denominator)
+            let result = RationalTime(numerator: a.numerator + b.numerator, denominator: a.denominator)
+            return result.reduced
         }
         let commonDenom = a.denominator * b.denominator
         let newNum = a.numerator * b.denominator + b.numerator * a.denominator
-        return RationalTime(numerator: newNum, denominator: commonDenom)
+        return RationalTime(numerator: newNum, denominator: commonDenom).reduced
     }
 
     private func sequenceDuration(

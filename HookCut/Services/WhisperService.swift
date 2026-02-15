@@ -136,8 +136,16 @@ struct WhisperService {
             if index == 0 { language = chunkResult.language }
 
             if index > 0, let lastEnd = allSegments.last?.end {
-                let newSegments = chunkResult.segments.filter { $0.start >= lastEnd - 1.0 }
-                allSegments.append(contentsOf: newSegments)
+                // Filter out segments that overlap with already-processed content.
+                // Use the chunk overlap window to properly deduplicate.
+                let newSegments = chunkResult.segments.filter { $0.start >= lastEnd - 0.5 }
+                // Further deduplicate by removing segments with near-identical text
+                let deduped = newSegments.filter { seg in
+                    !allSegments.suffix(5).contains { existing in
+                        abs(existing.start - seg.start) < 2.0 && existing.text == seg.text
+                    }
+                }
+                allSegments.append(contentsOf: deduped)
             } else {
                 allSegments.append(contentsOf: chunkResult.segments)
             }
@@ -237,8 +245,12 @@ struct WhisperService {
         appendField("timestamp_granularities[]", "segment")
 
         let mimeType = fileName.hasSuffix(".wav") ? "audio/wav" : "audio/m4a"
+        let sanitizedName = fileName
+            .replacingOccurrences(of: "\"", with: "_")
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\n", with: "")
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(sanitizedName)\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
         body.append(audioData)
         body.append("\r\n".data(using: .utf8)!)

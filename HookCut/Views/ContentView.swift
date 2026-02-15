@@ -17,9 +17,6 @@ struct ContentView: View {
         .onAppear {
             viewModel.appState = appState
         }
-        .onChange(of: appState.settings.openAIAPIKey) {
-            appState.saveSettings()
-        }
         .alert("Error", isPresented: $viewModel.showError) {
             Button("OK") { viewModel.showError = false }
         } message: {
@@ -35,6 +32,13 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    viewModel.showBatchView = true
+                } label: {
+                    Label("Batch", systemImage: "square.stack.3d.up")
+                }
+                .help("Batch process multiple files")
+
                 if appState.currentFile != nil {
                     Button {
                         viewModel.showExportSheet = true
@@ -54,7 +58,7 @@ struct ContentView: View {
             HSplitView {
                 // Left sidebar: Import & file info
                 ImportView(viewModel: viewModel)
-                    .frame(minWidth: 220, idealWidth: 250, maxWidth: 320)
+                    .frame(minWidth: 300, idealWidth: 340, maxWidth: 420)
 
                 // Center: Video player
                 VideoPlayerView(viewModel: viewModel)

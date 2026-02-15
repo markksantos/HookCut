@@ -27,10 +27,19 @@ struct ImportView: View {
             allowedContentTypes: acceptedTypes,
             allowsMultipleSelection: false
         ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                guard url.startAccessingSecurityScopedResource() else { return }
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                guard url.startAccessingSecurityScopedResource() else {
+                    viewModel.errorMessage = "Unable to access the selected file. Please try again or choose a different file."
+                    viewModel.showError = true
+                    return
+                }
                 defer { url.stopAccessingSecurityScopedResource() }
                 viewModel.importFile(url: url)
+            case .failure(let error):
+                viewModel.errorMessage = "File import failed: \(error.localizedDescription)"
+                viewModel.showError = true
             }
         }
     }
@@ -123,14 +132,21 @@ struct ImportView: View {
 
     private var costEstimateCard: some View {
         Group {
-            if let estimate = viewModel.costEstimate {
-                VStack(alignment: .leading, spacing: 4) {
+            if let duration = appState.currentFile?.duration, duration > 0 {
+                let estimate = CostEstimatorService.estimate(
+                    durationSeconds: duration,
+                    provider: appState.settings.aiProvider
+                )
+                VStack(alignment: .leading, spacing: 6) {
                     Label("Cost Estimate", systemImage: "dollarsign.circle")
                         .font(.headline)
-                    Text(String(format: "Estimated cost: $%.2f", estimate.totalCost))
+                    Text("Estimated cost: \(estimate.formattedTotal)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    Text(String(format: "%.1f min audio", estimate.audioDurationMinutes))
+                    Text(estimate.breakdown)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Text(String(format: "%.1f min audio | ~%d tokens", estimate.audioDurationMinutes, estimate.estimatedTotalInputTokens))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -151,16 +167,49 @@ struct ImportView: View {
                         Label("Target Duration", systemImage: "timer")
                             .font(.subheadline.weight(.medium))
 
-                        Picker("", selection: $appState.settings.targetDurationSeconds) {
-                            Text("Auto").tag(0)
-                            Text("30s").tag(30)
-                            Text("1 min").tag(60)
-                            Text("2 min").tag(120)
-                            Text("3 min").tag(180)
-                            Text("5 min").tag(300)
-                            Text("10 min").tag(600)
+                        HStack(spacing: 8) {
+                            Toggle("Auto", isOn: Binding(
+                                get: { appState.settings.targetDurationSeconds == 0 },
+                                set: { appState.settings.targetDurationSeconds = $0 ? 0 : 60 }
+                            ))
+                            .toggleStyle(.checkbox)
+
+                            Spacer()
+
+                            if appState.settings.targetDurationSeconds > 0 {
+                                TextField("", value: Binding(
+                                    get: { appState.settings.targetDurationSeconds / 60 },
+                                    set: { mins in
+                                        let clampedMins = max(0, min(180, mins))
+                                        let secs = appState.settings.targetDurationSeconds % 60
+                                        appState.settings.targetDurationSeconds = max(5, clampedMins * 60 + secs)
+                                    }
+                                ), format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 44)
+                                .multilineTextAlignment(.trailing)
+
+                                Text("min")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                TextField("", value: Binding(
+                                    get: { appState.settings.targetDurationSeconds % 60 },
+                                    set: { secs in
+                                        let clampedSecs = max(0, min(59, secs))
+                                        let mins = appState.settings.targetDurationSeconds / 60
+                                        appState.settings.targetDurationSeconds = max(5, mins * 60 + clampedSecs)
+                                    }
+                                ), format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 44)
+                                .multilineTextAlignment(.trailing)
+
+                                Text("sec")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        .pickerStyle(.segmented)
                         .onChange(of: appState.settings.targetDurationSeconds) {
                             appState.saveSettings()
                         }
@@ -180,9 +229,21 @@ struct ImportView: View {
                     .disabled(!viewModel.hasAPIKey)
 
                     if !viewModel.hasAPIKey {
-                        Text("Set API key in Settings first")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            if appState.settings.openAIAPIKey.isEmpty {
+                                Text("OpenAI API key required (for Whisper transcription)")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                            if appState.settings.aiProvider == .anthropic && appState.settings.anthropicAPIKey.isEmpty {
+                                Text("Anthropic API key required (selected as AI provider)")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                            Text("Set in Settings (Cmd+,)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             } else if case .complete = appState.processingState {
@@ -207,6 +268,7 @@ struct ImportView: View {
                 EmptyView()
             case .extractingAudio(let progress):
                 progressCard("Extracting audio...", progress: progress)
+                cancelButton
             case .transcribing(let progress, let remaining):
                 VStack(alignment: .leading, spacing: 6) {
                     progressCard("Transcribing...", progress: progress)
@@ -217,10 +279,13 @@ struct ImportView: View {
                             .padding(.horizontal)
                     }
                 }
+                cancelButton
             case .identifyingSpeakers:
                 indeterminateCard("Identifying speakers...")
+                cancelButton
             case .findingHighlights:
                 indeterminateCard("Finding highlights...")
+                cancelButton
             case .complete:
                 completionCard
             case .error(let message):
@@ -230,32 +295,62 @@ struct ImportView: View {
     }
 
     private var completionCard: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label("Analysis Complete", systemImage: "checkmark.circle.fill")
-                .font(.headline)
-                .foregroundStyle(.green)
-            if let analysis = appState.analysis {
-                Text("Found \(analysis.highlights.count) highlights from \(analysis.speakers.count) speakers")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        Group {
+            if let analysis = appState.analysis, analysis.highlights.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("No Highlights Found", systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.orange)
+                    Text("Try adjusting your settings, enabling more highlight types, or modifying the custom prompt.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.orange.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Analysis Complete", systemImage: "checkmark.circle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.green)
+                    if let analysis = appState.analysis {
+                        Text("Found \(analysis.highlights.count) highlights from \(analysis.speakers.count) speakers")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.green.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.green.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var newFileButton: some View {
         Button {
+            viewModel.resetForNewFile()
             appState.currentFile = nil
             appState.processingState = .idle
             appState.transcription = nil
             appState.analysis = nil
+            appState.selectedHighlightId = nil
         } label: {
             Label("New File", systemImage: "plus.circle")
         }
         .buttonStyle(.borderless)
+    }
+
+    private var cancelButton: some View {
+        Button(role: .destructive) {
+            viewModel.cancelAnalysis()
+        } label: {
+            Label("Cancel", systemImage: "xmark.circle")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
     }
 
     // MARK: - Helper Views
