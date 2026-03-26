@@ -11,6 +11,7 @@ final class AppViewModel: ObservableObject {
     @Published var isPlaying: Bool = false
     @Published var showExportSheet: Bool = false
     @Published var showBatchView: Bool = false
+    @Published var showSettings: Bool = false
     @Published var errorMessage: String?
     @Published var showError: Bool = false
     @Published var isPreviewingAssembled: Bool = false
@@ -173,25 +174,43 @@ final class AppViewModel: ObservableObject {
                     }
                 }
 
-                // Step 2: Transcribe
+                // Step 2: Transcribe (cloud or local based on setting)
                 try Task.checkCancellation()
+                if appState.settings.transcriptionEngine == .local {
+                    // Ensure model is downloaded and loaded
+                    let localService = LocalWhisperService.shared
+                    try await localService.prepareModel(variant: appState.settings.localModelVariant)
+                }
                 appState.processingState = .transcribing(progress: 0, estimatedRemaining: nil)
-                let apiKey = appState.settings.openAIAPIKey
-                let transcript = try await service.transcribe(audioURL: audioURL, apiKey: apiKey) { progress in
-                    Task { @MainActor in
-                        let remaining = file.duration * (1.0 - progress) * 0.3
-                        appState.processingState = .transcribing(progress: progress, estimatedRemaining: remaining)
+                let transcript: TranscriptionResult
+                if appState.settings.transcriptionEngine == .local {
+                    transcript = try await service.transcribeLocally(audioURL: audioURL) { progress in
+                        Task { @MainActor in
+                            appState.processingState = .transcribing(progress: progress, estimatedRemaining: nil)
+                        }
+                    }
+                } else {
+                    let apiKey = appState.settings.openAIAPIKey
+                    transcript = try await service.transcribe(audioURL: audioURL, apiKey: apiKey) { progress in
+                        Task { @MainActor in
+                            let remaining = file.duration * (1.0 - progress) * 0.3
+                            appState.processingState = .transcribing(progress: progress, estimatedRemaining: remaining)
+                        }
                     }
                 }
 
                 // Step 3: Identify speakers
                 try Task.checkCancellation()
                 appState.processingState = .identifyingSpeakers
+                let analysisApiKey = appState.settings.aiProvider == .anthropic
+                    ? (appState.settings.anthropicAPIKey.isEmpty ? appState.settings.openAIAPIKey : appState.settings.openAIAPIKey)
+                    : appState.settings.openAIAPIKey
                 let diarized = try await service.identifySpeakers(
                     transcript: transcript,
-                    apiKey: apiKey,
+                    apiKey: analysisApiKey,
                     provider: appState.settings.aiProvider,
-                    anthropicKey: appState.settings.anthropicAPIKey.isEmpty ? nil : appState.settings.anthropicAPIKey
+                    anthropicKey: appState.settings.anthropicAPIKey.isEmpty ? nil : appState.settings.anthropicAPIKey,
+                    ollamaModel: appState.settings.ollamaModel
                 )
                 appState.transcription = diarized
 
@@ -488,13 +507,22 @@ final class AppViewModel: ObservableObject {
 
     var hasAPIKey: Bool {
         guard let appState else { return false }
-        // OpenAI key is always required for Whisper transcription
-        guard !appState.settings.openAIAPIKey.isEmpty else { return false }
-        // If using Anthropic for analysis, also need an Anthropic key
-        if appState.settings.aiProvider == .anthropic {
-            return !appState.settings.anthropicAPIKey.isEmpty
+        let settings = appState.settings
+
+        // For cloud transcription, OpenAI key is required
+        if settings.transcriptionEngine == .cloud && settings.openAIAPIKey.isEmpty {
+            return false
         }
-        return true
+
+        // For analysis: Ollama needs no key, others need their respective keys
+        switch settings.aiProvider {
+        case .ollama:
+            return true
+        case .anthropic:
+            return !settings.anthropicAPIKey.isEmpty
+        case .openAI:
+            return !settings.openAIAPIKey.isEmpty
+        }
     }
 
     // MARK: - Helpers

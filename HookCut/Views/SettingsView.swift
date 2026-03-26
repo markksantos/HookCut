@@ -3,79 +3,217 @@ import SwiftUI
 /// Settings view accessible from the app menu (Cmd+,)
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
+    @StateObject private var localWhisper = LocalWhisperService.shared
     @State private var showDeleteConfirmation = false
     @State private var templateToDelete: PromptTemplate?
+    @State private var isDownloadingModel = false
 
     var body: some View {
         TabView {
-            apiKeysTab
-                .tabItem { Label("API Keys", systemImage: "key") }
-            analysisTab
-                .tabItem { Label("Analysis", systemImage: "wand.and.stars") }
+            generalTab
+                .tabItem { Label("General", systemImage: "gearshape") }
+            highlightsTab
+                .tabItem { Label("Highlights", systemImage: "wand.and.stars") }
             exportTab
                 .tabItem { Label("Export", systemImage: "square.and.arrow.up") }
             templatesTab
                 .tabItem { Label("Templates", systemImage: "doc.text") }
         }
-        .frame(width: 520, height: 440)
+        .frame(width: 560, height: 520)
     }
 
-    // MARK: - API Keys Tab
+    // MARK: - General Tab
 
-    private var apiKeysTab: some View {
+    private var generalTab: some View {
         Form {
-            Section("OpenAI") {
-                SecureField("API Key", text: $appState.settings.openAIAPIKey)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: appState.settings.openAIAPIKey) { appState.saveSettings() }
-                Text("Required for transcription (Whisper). Also used for analysis if selected.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+            // --- Transcription ---
+            Section("Transcription") {
+                Picker("Engine", selection: $appState.settings.transcriptionEngine) {
+                    ForEach(TranscriptionEngine.allCases, id: \.self) { engine in
+                        Text(engine.rawValue).tag(engine)
+                    }
+                }
+                .onChange(of: appState.settings.transcriptionEngine) { appState.saveSettings() }
+
+                if appState.settings.transcriptionEngine == .cloud {
+                    SecureField("OpenAI API Key", text: $appState.settings.openAIAPIKey)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: appState.settings.openAIAPIKey) { appState.saveSettings() }
+
+                    if appState.settings.openAIAPIKey.isEmpty {
+                        Label("Required for cloud transcription", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                } else {
+                    Picker("Model", selection: $appState.settings.localModelVariant) {
+                        ForEach(LocalWhisperModel.allCases) { model in
+                            Text(model.displayName).tag(model)
+                        }
+                    }
+                    .onChange(of: appState.settings.localModelVariant) { appState.saveSettings() }
+
+                    Text(appState.settings.localModelVariant.qualityDescription)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+
+                    // Model download status
+                    modelStatusRow
+                }
             }
 
-            Section("Anthropic") {
-                SecureField("API Key", text: $appState.settings.anthropicAPIKey)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: appState.settings.anthropicAPIKey) { appState.saveSettings() }
-                Text("Used for speaker identification and highlight detection when selected.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-
-            Section("Provider") {
-                Picker("AI Provider", selection: $appState.settings.aiProvider) {
+            // --- Analysis ---
+            Section("Analysis") {
+                Picker("Provider", selection: $appState.settings.aiProvider) {
                     ForEach(AIProvider.allCases, id: \.self) { provider in
                         Text(provider.rawValue).tag(provider)
                     }
                 }
                 .onChange(of: appState.settings.aiProvider) { appState.saveSettings() }
-                Text("OpenAI is always used for transcription. This controls which AI is used for analysis.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+
+                switch appState.settings.aiProvider {
+                case .openAI:
+                    if appState.settings.transcriptionEngine == .local {
+                        // Only show key here if it's not already shown in transcription section
+                        SecureField("OpenAI API Key", text: $appState.settings.openAIAPIKey)
+                            .textFieldStyle(.roundedBorder)
+                            .onChange(of: appState.settings.openAIAPIKey) { appState.saveSettings() }
+                    }
+                    if appState.settings.openAIAPIKey.isEmpty {
+                        Label("Required for analysis", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                case .anthropic:
+                    SecureField("Anthropic API Key", text: $appState.settings.anthropicAPIKey)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: appState.settings.anthropicAPIKey) { appState.saveSettings() }
+                    if appState.settings.anthropicAPIKey.isEmpty {
+                        Label("Required for analysis", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                case .ollama:
+                    TextField("Model", text: $appState.settings.ollamaModel)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: appState.settings.ollamaModel) { appState.saveSettings() }
+                    Text("Requires Ollama running locally. Recommended: qwen3:8b (16GB+) or qwen3:4b (8GB).")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
 
-            if !hasActiveAPIKey {
-                VStack(alignment: .leading, spacing: 2) {
-                    if appState.settings.openAIAPIKey.isEmpty {
-                        Label("OpenAI API key required for Whisper transcription", systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                            .font(.callout)
-                    }
-                    if appState.settings.aiProvider == .anthropic && appState.settings.anthropicAPIKey.isEmpty {
-                        Label("Anthropic API key required (selected as AI provider)", systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                            .font(.callout)
-                    }
+            // --- Fully local badge ---
+            if appState.settings.transcriptionEngine == .local && appState.settings.aiProvider == .ollama {
+                Section {
+                    Label("Fully local — no API keys, no cloud, no cost", systemImage: "lock.shield")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.green)
                 }
+            }
+
+            Section {
+                Button("Reset All Settings to Defaults") {
+                    appState.settings = .default
+                    appState.saveSettings()
+                }
+                .foregroundStyle(.red)
             }
         }
         .formStyle(.grouped)
         .padding()
     }
 
-    // MARK: - Analysis Tab
+    // MARK: - Model Status Row
 
-    private var analysisTab: some View {
+    @ViewBuilder
+    private var modelStatusRow: some View {
+        switch localWhisper.modelState {
+        case .notDownloaded:
+            HStack {
+                Label("Not downloaded", systemImage: "arrow.down.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") {
+                    downloadModel()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(isDownloadingModel)
+            }
+        case .downloading:
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Downloading \(localWhisper.downloadingModelName)")
+                        .font(.caption.weight(.medium))
+                    Spacer()
+                    Text("\(Int(localWhisper.downloadProgress * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                ProgressView(value: localWhisper.downloadProgress)
+                HStack(spacing: 12) {
+                    if !localWhisper.downloadedSize.isEmpty {
+                        Text("\(localWhisper.downloadedSize) / \(localWhisper.totalSize)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    if !localWhisper.downloadSpeed.isEmpty {
+                        Text(localWhisper.downloadSpeed)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                    if !localWhisper.downloadETA.isEmpty {
+                        Text("ETA: \(localWhisper.downloadETA)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        case .loading:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading model...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .ready:
+            Label("Model ready", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .error(let message):
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Error", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Button("Retry") { downloadModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+            }
+        }
+    }
+
+    private func downloadModel() {
+        isDownloadingModel = true
+        Task {
+            do {
+                try await localWhisper.prepareModel(variant: appState.settings.localModelVariant)
+            } catch {
+                // Error state handled by localWhisper.modelState
+            }
+            isDownloadingModel = false
+        }
+    }
+
+    // MARK: - Highlights Tab
+
+    private var highlightsTab: some View {
         Form {
             Section("Highlight Count") {
                 Toggle("Let AI decide", isOn: Binding(
@@ -164,14 +302,6 @@ struct SettingsView: View {
                 }
                 .onChange(of: appState.settings.defaultGapDuration) { appState.saveSettings() }
             }
-
-            Section {
-                Button("Reset All Settings to Defaults") {
-                    appState.settings = .default
-                    appState.saveSettings()
-                }
-                .foregroundStyle(.red)
-            }
         }
         .formStyle(.grouped)
         .padding()
@@ -181,7 +311,6 @@ struct SettingsView: View {
 
     private var templatesTab: some View {
         VStack {
-            // Active template selector
             HStack {
                 Text("Active Template:")
                     .font(.subheadline.weight(.medium))
@@ -292,17 +421,5 @@ struct SettingsView: View {
             }
             .padding()
         }
-    }
-
-    // MARK: - Helpers
-
-    private var hasActiveAPIKey: Bool {
-        // OpenAI key is always required for Whisper transcription
-        guard !appState.settings.openAIAPIKey.isEmpty else { return false }
-        // If using Anthropic for analysis, also need an Anthropic key
-        if appState.settings.aiProvider == .anthropic {
-            return !appState.settings.anthropicAPIKey.isEmpty
-        }
-        return true
     }
 }

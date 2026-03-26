@@ -304,7 +304,8 @@ struct BatchView: View {
                     transcript: transcript,
                     apiKey: appState.settings.openAIAPIKey,
                     provider: appState.settings.aiProvider,
-                    anthropicKey: appState.settings.anthropicAPIKey.isEmpty ? nil : appState.settings.anthropicAPIKey
+                    anthropicKey: appState.settings.anthropicAPIKey.isEmpty ? nil : appState.settings.anthropicAPIKey,
+                    ollamaModel: appState.settings.ollamaModel
                 )
                 appState.batchItems[i].transcription = diarized
 

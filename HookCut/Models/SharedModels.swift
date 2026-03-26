@@ -363,6 +363,7 @@ struct ExportConfig: Codable {
 enum AIProvider: String, Codable, CaseIterable {
     case openAI = "OpenAI (GPT-4o)"
     case anthropic = "Anthropic (Claude)"
+    case ollama = "Local (Ollama)"
 }
 
 /// How highlights are sorted in the review panel
@@ -373,11 +374,48 @@ enum HighlightSortOrder: String, Codable, CaseIterable {
     case bySpeaker = "By Speaker"
 }
 
+/// Transcription engine: cloud (OpenAI Whisper API) or local (WhisperKit on-device)
+enum TranscriptionEngine: String, Codable, CaseIterable {
+    case cloud = "Cloud (OpenAI)"
+    case local = "Local (On-Device)"
+}
+
+/// Available local Whisper model variants
+enum LocalWhisperModel: String, Codable, CaseIterable, Identifiable {
+    case tiny = "openai_whisper-tiny.en"
+    case base = "openai_whisper-base.en"
+    case small = "openai_whisper-small.en"
+    case large = "openai_whisper-large-v3"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .tiny: return "Tiny (~40 MB)"
+        case .base: return "Base (~75 MB)"
+        case .small: return "Small (~216 MB)"
+        case .large: return "Large v3 (~947 MB)"
+        }
+    }
+
+    var qualityDescription: String {
+        switch self {
+        case .tiny: return "Fastest, basic quality"
+        case .base: return "Fast, good quality"
+        case .small: return "Balanced speed and quality"
+        case .large: return "Best quality, slower"
+        }
+    }
+}
+
 /// App settings
 struct AppSettings: Codable {
     var openAIAPIKey: String
     var anthropicAPIKey: String
     var aiProvider: AIProvider
+    var ollamaModel: String
+    var transcriptionEngine: TranscriptionEngine
+    var localModelVariant: LocalWhisperModel
     var defaultHighlightCount: Int // 5-30
     var enabledHighlightTypes: Set<HighlightType>
     var defaultExportFormat: ExportFormat
@@ -391,6 +429,9 @@ struct AppSettings: Codable {
             openAIAPIKey: "",
             anthropicAPIKey: "",
             aiProvider: .openAI,
+            ollamaModel: "qwen3:8b",
+            transcriptionEngine: .cloud,
+            localModelVariant: .small,
             defaultHighlightCount: 15,
             enabledHighlightTypes: Set(HighlightType.allCases),
             defaultExportFormat: .fcpxml,

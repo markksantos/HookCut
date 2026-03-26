@@ -1,0 +1,46 @@
+name: HookCut
+options:
+  bundleIdPrefix: com.markstudios
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    COMBINE_HIDPI_IMAGES: YES
+    CODE_SIGN_STYLE: Automatic
+
+packages:
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit.git
+    from: "0.12.0"
+
+targets:
+  HookCut:
+    type: application
+    platform: macOS
+    sources:
+      - path: HookCut
+        excludes:
+          - Info.plist
+          - HookCut.entitlements
+          - Resources
+    dependencies:
+      - package: WhisperKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.markstudios.HookCut
+        INFOPLIST_FILE: HookCut/Info.plist
+        CODE_SIGN_ENTITLEMENTS: HookCut/HookCut.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        PRODUCT_NAME: HookCut
+        GENERATE_INFOPLIST_FILE: NO
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: "1.0"
+    info:
+      path: HookCut/Info.plist
+      properties: {}

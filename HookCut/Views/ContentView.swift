@@ -49,6 +49,7 @@ struct ContentView: View {
                     .disabled(appState.analysis == nil)
                     .help("Export highlights")
                 }
+
             }
         }
     }

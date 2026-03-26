@@ -33,6 +33,25 @@ class AppState: ObservableObject {
     @Published var promptTemplates: [PromptTemplate] = PromptTemplate.builtInTemplates
     @Published var selectedTemplate: PromptTemplate?
 
+    /// The currently accessed security-scoped URL (must be released when done)
+    private var securityScopedURL: URL?
+
+    /// Begin accessing a security-scoped resource and track it for later release
+    func beginAccessingFile(_ url: URL) -> URL {
+        // Release any previously held resource
+        stopAccessingCurrentFile()
+        if url.startAccessingSecurityScopedResource() {
+            securityScopedURL = url
+        }
+        return url
+    }
+
+    /// Stop accessing the current security-scoped resource
+    func stopAccessingCurrentFile() {
+        securityScopedURL?.stopAccessingSecurityScopedResource()
+        securityScopedURL = nil
+    }
+
     // Services
     var transcriptionService: TranscriptionServiceProtocol?
     var exportService: ExportServiceProtocol?
@@ -54,7 +73,8 @@ class AppState: ObservableObject {
 protocol TranscriptionServiceProtocol {
     func extractAudio(from url: URL, progressHandler: @escaping (Double) -> Void) async throws -> URL
     func transcribe(audioURL: URL, apiKey: String, progressHandler: @escaping (Double) -> Void) async throws -> TranscriptionResult
-    func identifySpeakers(transcript: TranscriptionResult, apiKey: String, provider: AIProvider, anthropicKey: String?) async throws -> TranscriptionResult
+    func transcribeLocally(audioURL: URL, progressHandler: @escaping (Double) -> Void) async throws -> TranscriptionResult
+    func identifySpeakers(transcript: TranscriptionResult, apiKey: String, provider: AIProvider, anthropicKey: String?, ollamaModel: String?) async throws -> TranscriptionResult
     func findHighlights(transcript: TranscriptionResult, settings: AppSettings, template: PromptTemplate?) async throws -> AnalysisResult
 }
 

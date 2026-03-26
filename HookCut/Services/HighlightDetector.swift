@@ -50,6 +50,12 @@ struct HighlightDetector {
                     apiKey: settings.openAIAPIKey
                 )
             }
+        case .ollama:
+            responseJSON = try await callOllama(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                model: settings.ollamaModel
+            )
         }
 
         return try parseResponse(responseJSON, transcript: transcript)
@@ -230,6 +236,56 @@ struct HighlightDetector {
             throw DetectionError.parsingFailed("Could not extract text from Anthropic response")
         }
         return text
+    }
+
+    // MARK: - Ollama (Local)
+
+    private static func callOllama(
+        systemPrompt: String,
+        userPrompt: String,
+        model: String,
+        retryCount: Int = 0
+    ) async throws -> String {
+        let url = URL(string: "http://localhost:11434/v1/chat/completions")!
+        let requestBody: [String: Any] = [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": userPrompt]
+            ],
+            "temperature": 0.3,
+            "response_format": ["type": "json_object"],
+            "stream": false
+        ]
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 1200 // Local models can be slower
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let (data, response) = try await APISession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw DetectionError.apiError(0, "Invalid response from Ollama. Is Ollama running?")
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? "Unknown"
+            if httpResponse.statusCode == 0 || body.contains("connection refused") {
+                throw DetectionError.apiError(httpResponse.statusCode, "Cannot connect to Ollama. Make sure Ollama is running (ollama serve).")
+            }
+            throw DetectionError.apiError(httpResponse.statusCode, body)
+        }
+
+        // Same response format as OpenAI
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let message = first["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            throw DetectionError.parsingFailed("Could not extract content from Ollama response")
+        }
+        return content
     }
 
     // MARK: - Response Parsing

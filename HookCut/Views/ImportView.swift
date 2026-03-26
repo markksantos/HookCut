@@ -30,13 +30,8 @@ struct ImportView: View {
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                guard url.startAccessingSecurityScopedResource() else {
-                    viewModel.errorMessage = "Unable to access the selected file. Please try again or choose a different file."
-                    viewModel.showError = true
-                    return
-                }
-                defer { url.stopAccessingSecurityScopedResource() }
-                viewModel.importFile(url: url)
+                let accessedURL = appState.beginAccessingFile(url)
+                viewModel.importFile(url: accessedURL)
             case .failure(let error):
                 viewModel.errorMessage = "File import failed: \(error.localizedDescription)"
                 viewModel.showError = true
@@ -230,8 +225,13 @@ struct ImportView: View {
 
                     if !viewModel.hasAPIKey {
                         VStack(alignment: .leading, spacing: 2) {
-                            if appState.settings.openAIAPIKey.isEmpty {
-                                Text("OpenAI API key required (for Whisper transcription)")
+                            if appState.settings.transcriptionEngine == .cloud && appState.settings.openAIAPIKey.isEmpty {
+                                Text("OpenAI API key required (for cloud transcription)")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                            if appState.settings.aiProvider == .openAI && appState.settings.openAIAPIKey.isEmpty {
+                                Text("OpenAI API key required (for highlight analysis)")
                                     .font(.caption)
                                     .foregroundStyle(.orange)
                             }
@@ -331,6 +331,7 @@ struct ImportView: View {
     private var newFileButton: some View {
         Button {
             viewModel.resetForNewFile()
+            appState.stopAccessingCurrentFile()
             appState.currentFile = nil
             appState.processingState = .idle
             appState.transcription = nil
@@ -416,15 +417,17 @@ struct ImportView: View {
         guard let provider = providers.first else { return false }
         for type in acceptedTypes {
             if provider.hasItemConformingToTypeIdentifier(type.identifier) {
-                provider.loadItem(forTypeIdentifier: type.identifier, options: nil) { item, _ in
+                provider.loadItem(forTypeIdentifier: type.identifier, options: nil) { [weak appState] item, _ in
                     if let url = item as? URL {
                         Task { @MainActor in
-                            viewModel.importFile(url: url)
+                            let accessedURL = appState?.beginAccessingFile(url) ?? url
+                            viewModel.importFile(url: accessedURL)
                         }
                     } else if let data = item as? Data,
                               let url = URL(dataRepresentation: data, relativeTo: nil) {
                         Task { @MainActor in
-                            viewModel.importFile(url: url)
+                            let accessedURL = appState?.beginAccessingFile(url) ?? url
+                            viewModel.importFile(url: accessedURL)
                         }
                     }
                 }

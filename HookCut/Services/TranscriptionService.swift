@@ -22,17 +22,30 @@ final class TranscriptionService: TranscriptionServiceProtocol {
         )
     }
 
+    func transcribeLocally(
+        audioURL: URL,
+        progressHandler: @escaping (Double) -> Void
+    ) async throws -> TranscriptionResult {
+        let localService = await LocalWhisperService.shared
+        return try await localService.transcribe(
+            audioURL: audioURL,
+            progressHandler: progressHandler
+        )
+    }
+
     func identifySpeakers(
         transcript: TranscriptionResult,
         apiKey: String,
         provider: AIProvider,
-        anthropicKey: String?
+        anthropicKey: String?,
+        ollamaModel: String? = nil
     ) async throws -> TranscriptionResult {
         try await SpeakerDiarization.identifySpeakers(
             transcript: transcript,
             apiKey: apiKey,
             provider: provider,
-            anthropicKey: anthropicKey
+            anthropicKey: anthropicKey,
+            ollamaModel: ollamaModel
         )
     }
 

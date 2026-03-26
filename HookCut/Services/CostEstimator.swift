@@ -56,6 +56,8 @@ struct CostEstimatorService {
         case .anthropic:
             analysisCost = (totalInputTokens / 1_000_000 * claudeInputPricePerMillion)
                          + (totalOutputTokens / 1_000_000 * claudeOutputPricePerMillion)
+        case .ollama:
+            analysisCost = 0 // Local, free
         }
 
         return DetailedCostEstimate(
