@@ -2,6 +2,8 @@
 
 # HookCut
 
+<img src="app-icon.png" width="128" alt="HookCut icon" />
+
 **macOS app that uses AI to find the best highlights in podcast and video transcripts, then exports them as NLE-ready timelines**
 
 [![Swift](https://img.shields.io/badge/Swift-5.9-F05138?style=for-the-badge&logo=swift&logoColor=white)](https://swift.org)
