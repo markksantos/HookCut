@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import AVFoundation
+import AppKit
 
 /// Batch processing view for handling multiple files
 struct BatchView: View {
@@ -9,6 +10,9 @@ struct BatchView: View {
     @State private var showFileImporter = false
     @State private var isProcessing = false
     @State private var currentProcessingIndex: Int?
+    @State private var batchTask: Task<Void, Never>?
+    @State private var isExporting = false
+    @State private var exportMessage: String?
 
     private let acceptedTypes: [UTType] = [
         .mpeg4Movie, .quickTimeMovie, .movie,
@@ -59,8 +63,32 @@ struct BatchView: View {
                     .buttonStyle(.borderless)
                     .disabled(isProcessing)
 
+                    if hasCompletedItems && !isProcessing {
+                        Button {
+                            exportAll()
+                        } label: {
+                            if isExporting {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Label("Export All", systemImage: "square.and.arrow.up")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isExporting)
+                        .help("Export every completed item to a folder in your default format")
+                    }
+
+                    if isProcessing {
+                        Button(role: .destructive) {
+                            cancelBatch()
+                        } label: {
+                            Label("Cancel", systemImage: "xmark.circle")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
                     Button {
-                        Task { await processBatch() }
+                        startBatch()
                     } label: {
                         if isProcessing {
                             HStack(spacing: 6) {
@@ -81,8 +109,15 @@ struct BatchView: View {
             }
             .padding()
 
+            if let exportMessage {
+                Text(exportMessage)
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                    .padding(.bottom, 8)
+            }
+
             if !hasAPIKey {
-                Text("Set API key in Settings to enable processing")
+                Text(needsAPIKeyMessage)
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.bottom, 8)
@@ -102,13 +137,39 @@ struct BatchView: View {
         }
     }
 
+    /// Whether the current settings can run the pipeline (mirrors AppViewModel.hasAPIKey).
     private var hasAPIKey: Bool {
-        !appState.settings.openAIAPIKey.isEmpty
+        let settings = appState.settings
+        if settings.transcriptionEngine == .cloud && settings.openAIAPIKey.isEmpty {
+            return false
+        }
+        switch settings.aiProvider {
+        case .ollama: return true
+        case .anthropic: return !settings.anthropicAPIKey.isEmpty
+        case .openAI: return !settings.openAIAPIKey.isEmpty
+        }
+    }
+
+    private var needsAPIKeyMessage: String {
+        if appState.settings.transcriptionEngine == .cloud && appState.settings.openAIAPIKey.isEmpty {
+            return "OpenAI API key required for cloud transcription (Settings ⌘,)"
+        }
+        if appState.settings.aiProvider == .anthropic && appState.settings.anthropicAPIKey.isEmpty {
+            return "Anthropic API key required for analysis (Settings ⌘,)"
+        }
+        return "Set an API key in Settings to enable processing"
     }
 
     private var allComplete: Bool {
         appState.batchItems.allSatisfy { item in
             if case .complete = item.state { return true }
+            return false
+        }
+    }
+
+    private var hasCompletedItems: Bool {
+        appState.batchItems.contains { item in
+            if case .complete = item.state { return item.analysis != nil }
             return false
         }
     }
@@ -267,12 +328,41 @@ struct BatchView: View {
 
     // MARK: - Batch Processing
 
+    private func startBatch() {
+        exportMessage = nil
+        batchTask = Task { await processBatch() }
+    }
+
+    private func cancelBatch() {
+        batchTask?.cancel()
+    }
+
     @MainActor
     private func processBatch() async {
         guard let service = appState.transcriptionService else { return }
         isProcessing = true
+        defer {
+            currentProcessingIndex = nil
+            isProcessing = false
+            batchTask = nil
+        }
+
+        let useLocal = appState.settings.transcriptionEngine == .local
+        if useLocal {
+            // Ensure the on-device model is downloaded/loaded once up front.
+            do {
+                try await LocalWhisperService.shared.prepareModel(variant: appState.settings.localModelVariant)
+            } catch {
+                // Surface the failure on the first idle item and stop.
+                if let i = appState.batchItems.firstIndex(where: { if case .idle = $0.state { return true }; return false }) {
+                    appState.batchItems[i].state = .error("Model load failed: \(error.localizedDescription)")
+                }
+                return
+            }
+        }
 
         for i in appState.batchItems.indices {
+            if Task.isCancelled { return }
             guard case .idle = appState.batchItems[i].state else { continue }
             currentProcessingIndex = i
 
@@ -286,17 +376,28 @@ struct BatchView: View {
                         self.appState.batchItems[i].state = .extractingAudio(progress: progress)
                     }
                 }
+                try Task.checkCancellation()
 
-                // Transcribe
+                // Transcribe (cloud or local, matching the user's setting)
                 appState.batchItems[i].state = .transcribing(progress: 0, estimatedRemaining: nil)
-                let transcript = try await service.transcribe(
-                    audioURL: audioURL,
-                    apiKey: appState.settings.openAIAPIKey
-                ) { progress in
-                    Task { @MainActor in
-                        self.appState.batchItems[i].state = .transcribing(progress: progress, estimatedRemaining: nil)
+                let transcript: TranscriptionResult
+                if useLocal {
+                    transcript = try await service.transcribeLocally(audioURL: audioURL) { progress in
+                        Task { @MainActor in
+                            self.appState.batchItems[i].state = .transcribing(progress: progress, estimatedRemaining: nil)
+                        }
+                    }
+                } else {
+                    transcript = try await service.transcribe(
+                        audioURL: audioURL,
+                        apiKey: appState.settings.openAIAPIKey
+                    ) { progress in
+                        Task { @MainActor in
+                            self.appState.batchItems[i].state = .transcribing(progress: progress, estimatedRemaining: nil)
+                        }
                     }
                 }
+                try Task.checkCancellation()
 
                 // Identify speakers
                 appState.batchItems[i].state = .identifyingSpeakers
@@ -308,6 +409,7 @@ struct BatchView: View {
                     ollamaModel: appState.settings.ollamaModel
                 )
                 appState.batchItems[i].transcription = diarized
+                try Task.checkCancellation()
 
                 // Find highlights
                 appState.batchItems[i].state = .findingHighlights
@@ -319,12 +421,75 @@ struct BatchView: View {
                 appState.batchItems[i].analysis = analysis
                 appState.batchItems[i].state = .complete
 
+            } catch is CancellationError {
+                // Reset the in-flight item so it can be re-run later.
+                appState.batchItems[i].state = .idle
+                return
             } catch {
                 appState.batchItems[i].state = .error(error.localizedDescription)
             }
         }
+    }
 
-        currentProcessingIndex = nil
-        isProcessing = false
+    // MARK: - Batch Export
+
+    private func exportAll() {
+        guard let exportService = appState.exportService else { return }
+        let format = appState.settings.defaultExportFormat
+        let config = ExportConfig(
+            format: format,
+            gapDuration: appState.settings.defaultGapDuration,
+            includeMarkers: true,
+            projectName: "Batch Highlights"
+        )
+
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        panel.title = "Choose a folder for batch exports"
+
+        panel.begin { response in
+            guard response == .OK, let folder = panel.url else { return }
+            Task { @MainActor in
+                isExporting = true
+                defer { isExporting = false }
+
+                var written = 0
+                for item in appState.batchItems {
+                    guard case .complete = item.state, let analysis = item.analysis else { continue }
+                    guard !analysis.approvedHighlights.isEmpty else { continue }
+
+                    let baseName = (item.fileInfo.fileName as NSString).deletingPathExtension
+                    let outURL = folder
+                        .appendingPathComponent("\(baseName)-highlights")
+                        .appendingPathExtension(format.fileExtension)
+                    do {
+                        let data: Data
+                        switch format {
+                        case .fcpxml:
+                            data = try exportService.exportFCPXML(analysis: analysis, mediaFile: item.fileInfo, config: config)
+                        case .premiereXML:
+                            data = try exportService.exportPremiereXML(analysis: analysis, mediaFile: item.fileInfo, config: config)
+                        case .edl:
+                            data = try exportService.exportEDL(analysis: analysis, mediaFile: item.fileInfo, config: config)
+                        case .csv:
+                            data = try exportService.exportCSV(analysis: analysis, mediaFile: item.fileInfo)
+                        case .srt:
+                            data = try exportService.exportSRT(analysis: analysis)
+                        case .plainText:
+                            data = try exportService.exportPlainText(analysis: analysis, transcript: item.transcription)
+                        }
+                        try data.write(to: outURL)
+                        written += 1
+                    } catch {
+                        // Skip items that fail (e.g. no approved highlights) and keep going.
+                        continue
+                    }
+                }
+                exportMessage = "Exported \(written) file\(written == 1 ? "" : "s") as \(format.rawValue)"
+            }
+        }
     }
 }
