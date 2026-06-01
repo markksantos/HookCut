@@ -162,18 +162,16 @@ struct FCPXMLGenerator {
         XMLNode.attribute(withName: name, stringValue: value) as! XMLNode
     }
 
+    /// Truncate overly long clip/marker labels. Do NOT manually escape XML
+    /// entities — Foundation's XMLNode/XMLElement escapes attribute and text
+    /// values on serialization, so pre-escaping here would double-encode
+    /// (e.g. "&" -> "&amp;amp;").
     private func sanitizeForXML(_ string: String) -> String {
-        var s = string
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&apos;")
         let maxLength = 200
-        if s.count > maxLength {
-            s = String(s.prefix(maxLength)) + "..."
+        if string.count > maxLength {
+            return String(string.prefix(maxLength)) + "..."
         }
-        return s
+        return string
     }
 
     private func addRationalTimes(_ a: RationalTime, _ b: RationalTime, denominator: Int) -> RationalTime {

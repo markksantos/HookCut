@@ -10,3 +10,6 @@ DerivedData/
 .env
 .env.local
 .env.*.local
+# Environment variables
+.env.production
+.env.development

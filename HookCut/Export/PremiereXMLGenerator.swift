@@ -179,17 +179,14 @@ struct PremiereXMLGenerator {
         return total
     }
 
+    /// Truncate long clip names. Do NOT manually escape XML entities —
+    /// XMLElement(name:stringValue:) escapes text on serialization, so
+    /// pre-escaping here would double-encode (e.g. "&" -> "&amp;amp;").
     private func sanitize(_ string: String) -> String {
-        var s = string
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&apos;")
         let maxLength = 200
-        if s.count > maxLength {
-            s = String(s.prefix(maxLength)) + "..."
+        if string.count > maxLength {
+            return String(string.prefix(maxLength)) + "..."
         }
-        return s
+        return string
     }
 }

@@ -199,15 +199,15 @@ final class AppViewModel: ObservableObject {
                     }
                 }
 
-                // Step 3: Identify speakers
+                // Step 3: Identify speakers.
+                // `apiKey` is the OpenAI key (used for the OpenAI provider and as the
+                // fallback when Anthropic is selected but no Anthropic key is set);
+                // `anthropicKey` is passed separately and used for the Claude path.
                 try Task.checkCancellation()
                 appState.processingState = .identifyingSpeakers
-                let analysisApiKey = appState.settings.aiProvider == .anthropic
-                    ? (appState.settings.anthropicAPIKey.isEmpty ? appState.settings.openAIAPIKey : appState.settings.openAIAPIKey)
-                    : appState.settings.openAIAPIKey
                 let diarized = try await service.identifySpeakers(
                     transcript: transcript,
-                    apiKey: analysisApiKey,
+                    apiKey: appState.settings.openAIAPIKey,
                     provider: appState.settings.aiProvider,
                     anthropicKey: appState.settings.anthropicAPIKey.isEmpty ? nil : appState.settings.anthropicAPIKey,
                     ollamaModel: appState.settings.ollamaModel

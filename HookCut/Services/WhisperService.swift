@@ -200,8 +200,21 @@ struct WhisperService {
         _ response: WhisperVerboseResponse,
         timeOffset: TimeInterval = 0
     ) -> TranscriptionResult {
+        // whisper-1 verbose_json returns word-level timestamps as a flat
+        // top-level `words` array, NOT nested under each segment. Distribute
+        // those words into the segment whose [start, end] range contains them
+        // so we don't silently drop word timestamps.
+        let topLevelWords = response.words ?? []
+
         let segments = (response.segments ?? []).map { seg in
-            let words = (seg.words ?? []).map { w in
+            let nested = seg.words ?? []
+            let segWords: [WhisperWord]
+            if !nested.isEmpty {
+                segWords = nested
+            } else {
+                segWords = topLevelWords.filter { $0.start >= seg.start - 0.001 && $0.start < seg.end + 0.001 }
+            }
+            let words = segWords.map { w in
                 TranscriptionWord(
                     word: w.word,
                     start: w.start + timeOffset,
