@@ -26,12 +26,13 @@ struct CostEstimatorService {
     /// Calculate a detailed cost estimate for processing a media file
     static func estimate(
         durationSeconds: TimeInterval,
-        provider: AIProvider = .openAI
+        provider: AIProvider = .openAI,
+        transcriptionEngine: TranscriptionEngine = .cloud
     ) -> DetailedCostEstimate {
         let minutes = durationSeconds / 60.0
 
-        // Whisper transcription cost
-        let whisperCost = minutes * whisperCostPerMinute
+        // Whisper transcription cost — on-device transcription is free.
+        let whisperCost = transcriptionEngine == .local ? 0 : minutes * whisperCostPerMinute
 
         // Estimate transcript token count
         let totalWords = minutes * wordsPerMinute

@@ -130,7 +130,8 @@ struct ImportView: View {
             if let duration = appState.currentFile?.duration, duration > 0 {
                 let estimate = CostEstimatorService.estimate(
                     durationSeconds: duration,
-                    provider: appState.settings.aiProvider
+                    provider: appState.settings.aiProvider,
+                    transcriptionEngine: appState.settings.transcriptionEngine
                 )
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Cost Estimate", systemImage: "dollarsign.circle")

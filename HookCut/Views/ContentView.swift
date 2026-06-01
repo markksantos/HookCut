@@ -5,6 +5,7 @@ import AVKit
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = AppViewModel()
+    @State private var showWelcome = false
 
     var body: some View {
         Group {
@@ -16,6 +17,13 @@ struct ContentView: View {
         }
         .onAppear {
             viewModel.appState = appState
+            if WelcomeView.shouldShow {
+                showWelcome = true
+            }
+        }
+        .sheet(isPresented: $showWelcome) {
+            WelcomeView()
+                .environmentObject(appState)
         }
         .alert("Error", isPresented: $viewModel.showError) {
             Button("OK") { viewModel.showError = false }
