@@ -174,3 +174,49 @@ Remaining (none block local use; most need Mark's account or a product call):
   against the live OpenAI/Anthropic endpoints in this run).
 - Optional: distribute word-level timestamps into the diarization/highlight
   prompts for tighter clip boundaries (now that word timestamps are preserved).
+
+## QA Verification
+
+**Reviewer:** independent QA subagent (claude-sonnet-4-6)
+**Date:** 2026-06-01
+
+### Commands run
+
+```bash
+swift build
+# -> Build complete! (3.53s)  ✓
+
+xcodebuild -project HookCut.xcodeproj -scheme HookCut -configuration Debug \
+  -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO
+# -> ** BUILD SUCCEEDED **  ✓
+
+swift test
+# -> Executed 25 tests, with 0 failures  ✓
+```
+
+### Findings
+
+All three build claims confirmed independently:
+
+- `swift build` succeeds clean with no warnings that indicate real problems.
+- `xcodebuild` (macOS app target, ad-hoc signed) succeeds with `** BUILD SUCCEEDED **`. The hardened-runtime note is expected for ad-hoc builds.
+- `swift test` reports 25/25 passing across ExporterTests (11) and ModelTests (14).
+
+Bug fix verification:
+
+- XML double-escaping fix confirmed in diff: manual `replacingOccurrences` for `& < > " '` removed from both `FCPXMLGenerator.sanitizeForXML` and `PremiereXMLGenerator.sanitize`; Foundation's XML APIs now perform the single correct escape. Regression tests `testFCPXMLDoesNotDoubleEscapeEntities` and `testPremiereXMLDoesNotDoubleEscapeEntities` are present and passing.
+- Whisper word timestamp fix confirmed: `parseWhisperResponse` now reads the top-level `words` array from `WhisperVerboseResponse` and distributes words into their containing segment by time range. The old code only read `seg.words`, which is always nil for `whisper-1 verbose_json`.
+- VideoPlayerView stale end-cap fix confirmed: `togglePlayback` and `seek` both reset `forwardPlaybackEndTime` to `.invalid` when not in assembled-preview mode.
+- Batch view: cancellation, local engine support, and Export All are all implemented in `BatchView.swift`; `hasAPIKey` logic mirrors the main pipeline.
+- `WelcomeView` is wired into `ContentView.onAppear` via `WelcomeView.shouldShow` / `WelcomeView.markSeen()`.
+- `CostEstimatorService` returns `whisperCost = 0` for `.local` transcription engine; `totalCost = 0` for `.ollama` + `.local`.
+
+No secrets found in Swift source or tracked files.
+
+### Discrepancies
+
+None material. All claims in the self-report are accurate. The count in the worklog says 7 commits; `git log` confirms exactly 7 commits on top of `427234a`.
+
+### Fixes applied by QA
+
+None needed. Build was clean; no build-breaking issues found.
