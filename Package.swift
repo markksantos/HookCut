@@ -20,6 +20,11 @@ let package = Package(
                 .process("Assets.xcassets"),
                 .copy("PrivacyInfo.xcprivacy")
             ]
+        ),
+        .testTarget(
+            name: "HookCutTests",
+            dependencies: ["HookCut"],
+            path: "Tests/HookCutTests"
         )
     ]
 )
