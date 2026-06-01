@@ -124,12 +124,23 @@ final class AppViewModel: ObservableObject {
         if isPlaying {
             player.pause()
         } else {
+            // Manual play: clear any leftover clip end-cap from a prior
+            // single-highlight preview so playback isn't silently truncated.
+            // (Assembled-preview mode manages its own end times.)
+            if !isPreviewingAssembled {
+                player.currentItem?.forwardPlaybackEndTime = .invalid
+            }
             player.play()
         }
         isPlaying.toggle()
     }
 
     func seek(to time: TimeInterval) {
+        // Scrubbing during normal playback clears the clip end-cap left by a
+        // previous highlight preview; otherwise the player would stop early.
+        if !isPreviewingAssembled {
+            player?.currentItem?.forwardPlaybackEndTime = .invalid
+        }
         let cmTime = CMTime(seconds: time, preferredTimescale: 600)
         player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
         playbackTime = time
